@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en" class="[scrollbar-gutter:stable]" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+  <.page_title suffix=" · Decision Engine">
+    <%= assigns[:page_title] || "Decision Engine" %>
+  </.page_title>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
+    </script>
+  </head>
+  <body class="bg-base-200">
+    <%= @inner_content %>
+  </body>
+</html>
