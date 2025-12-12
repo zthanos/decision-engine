@@ -107,3 +107,110 @@
     opacity: 0;
   }
 }
+
+/* Streaming-specific styles */
+.streaming-justification {
+  transition: all 0.3s ease;
+  overflow-y: auto;
+  max-height: 400px;
+}
+
+.streaming-justification::-webkit-scrollbar {
+  width: 6px;
+}
+
+.streaming-justification::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.streaming-justification::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.streaming-justification::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Streaming progress indicator */
+.streaming-progress {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Smooth content updates */
+.streaming-justification * {
+  animation: fadeInContent 0.3s ease-in;
+}
+
+@keyframes fadeInContent {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Enhanced prose styling for streamed content */
+.streaming-justification.prose {
+  color: inherit;
+}
+
+.streaming-justification.prose h1,
+.streaming-justification.prose h2,
+.streaming-justification.prose h3,
+.streaming-justification.prose h4 {
+  color: inherit;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.streaming-justification.prose h1:first-child,
+.streaming-justification.prose h2:first-child,
+.streaming-justification.prose h3:first-child,
+.streaming-justification.prose h4:first-child {
+  margin-top: 0;
+}
+
+.streaming-justification.prose ul,
+.streaming-justification.prose ol {
+  margin: 1em 0;
+}
+
+.streaming-justification.prose li {
+  margin: 0.25em 0;
+}
+
+.streaming-justification.prose p {
+  margin: 1em 0;
+}
+
+.streaming-justification.prose p:first-child {
+  margin-top: 0;
+}
+
+.streaming-justification.prose strong {
+  font-weight: 600;
+}
+
+.streaming-justification.prose em {
+  font-style: italic;
+}
+
+.streaming-justification.prose code {
+  background-color: rgba(0, 0, 0, 0.1);
+  padding: 0.125em 0.25em;
+  border-radius: 0.25em;
+  font-size: 0.875em;
+}

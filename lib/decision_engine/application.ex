@@ -6,8 +6,14 @@ defmodule DecisionEngine.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      # Start Finch for HTTP client streaming support
+      {Finch, name: DecisionEngine.Finch},
       # Start Phoenix PubSub so LiveView and channels can broadcast
       {Phoenix.PubSub, name: DecisionEngine.PubSub},
+      # Start the Registry for tracking SSE stream sessions
+      {Registry, keys: :unique, name: DecisionEngine.StreamRegistry},
+      # Start the RuleConfig cache for domain configurations
+      DecisionEngine.RuleConfig,
       # Start the endpoint so the web interface is available
       DecisionEngineWeb.Endpoint
     ]

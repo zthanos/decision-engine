@@ -1,96 +1,167 @@
 defmodule DecisionEngine.SignalsSchema do
   @moduledoc """
-  Defines the schema for signals extracted from user prompts.
+  Domain coordinator for signal schema modules.
+  
+  This module provides a unified interface for accessing domain-specific
+  signal schemas and their associated functionality. It maps domains to
+  their corresponding schema modules and provides convenience functions
+  for schema operations.
   """
 
-  @schema %{
-    "type" => "object",
-    "required" => ["workload_type", "primary_users", "trigger_nature"],
-    "properties" => %{
-      "workload_type" => %{
-        "type" => "string",
-        "enum" => ["user_productivity", "system_integration", "data_pipeline",
-                   "rpa_desktop", "event_driven_business_process"]
-      },
-      "primary_users" => %{
-        "type" => "array",
-        "items" => %{
-          "type" => "string",
-          "enum" => ["citizen_developers", "business_users", "pro_developers",
-                     "integration_team", "data_team"]
-        }
-      },
-      "trigger_nature" => %{
-        "type" => "string",
-        "enum" => ["user_action", "m365_event", "business_event", "system_event", "schedule"]
-      },
-      "target_systems" => %{
-        "type" => "array",
-        "items" => %{
-          "type" => "string",
-          "enum" => ["m365", "dataverse", "dynamics_365", "public_saas",
-                     "line_of_business_api", "on_premises_systems", "azure_paas"]
-        }
-      },
-      "connectivity_needs" => %{
-        "type" => "array",
-        "items" => %{
-          "type" => "string",
-          "enum" => ["public_internet", "on_prem_via_gateway",
-                     "private_azure_via_vnet", "none"]
-        }
-      },
-      "data_volume" => %{
-        "type" => "string",
-        "enum" => ["very_low", "low", "medium", "high", "streaming"]
-      },
-      "latency_requirement" => %{
-        "type" => "string",
-        "enum" => ["human_scale_seconds_minutes", "near_real_time", "sub_second_oltp"]
-      },
-      "process_pattern" => %{
-        "type" => "array",
-        "items" => %{
-          "type" => "string",
-          "enum" => ["approvals", "notifications", "document_flow", "data_sync",
-                     "human_workflow", "long_running_business_process",
-                     "integration_orchestration"]
-        }
-      },
-      "complexity_level" => %{
-        "type" => "string",
-        "enum" => ["simple", "moderate", "complex"]
-      },
-      "availability_requirement" => %{
-        "type" => "string",
-        "enum" => ["standard_business", "high", "mission_critical"]
-      },
-      "devops_need" => %{
-        "type" => "string",
-        "enum" => ["minimal", "basic_almd_solutions", "full_enterprise_devops"]
-      },
-      "governance_priority" => %{
-        "type" => "string",
-        "enum" => ["low", "medium", "high"]
-      }
-    }
-  }
+  alias DecisionEngine.Types
+  alias DecisionEngine.SignalsSchema.{PowerPlatform, DataPlatform, IntegrationPlatform}
 
-  def schema, do: @schema
-
-  def apply_defaults(signals) do
-    signals
-    |> Map.put_new("workload_type", "event_driven_business_process")
-    |> Map.put_new("primary_users", ["business_users"])
-    |> Map.put_new("trigger_nature", "business_event")
-    |> Map.put_new("target_systems", [])
-    |> Map.put_new("connectivity_needs", ["public_internet"])
-    |> Map.put_new("data_volume", "low")
-    |> Map.put_new("latency_requirement", "human_scale_seconds_minutes")
-    |> Map.put_new("process_pattern", [])
-    |> Map.put_new("complexity_level", "simple")
-    |> Map.put_new("availability_requirement", "standard_business")
-    |> Map.put_new("devops_need", "minimal")
-    |> Map.put_new("governance_priority", "medium")
+  @doc """
+  Returns the schema module for the specified domain.
+  
+  ## Examples
+  
+      iex> DecisionEngine.SignalsSchema.module_for(:power_platform)
+      DecisionEngine.SignalsSchema.PowerPlatform
+      
+      iex> DecisionEngine.SignalsSchema.module_for(:data_platform)
+      DecisionEngine.SignalsSchema.DataPlatform
+  """
+  @spec module_for(atom()) :: module()
+  def module_for(:power_platform), do: PowerPlatform
+  def module_for(:data_platform), do: DataPlatform
+  def module_for(:integration_platform), do: IntegrationPlatform
+  def module_for(domain) when is_atom(domain) do
+    # For dynamic domains, try to construct the module name
+    # This is a fallback - in a real system, you'd want a registry
+    domain_string = domain |> Atom.to_string() |> Macro.camelize()
+    Module.concat([DecisionEngine.SignalsSchema, domain_string])
   end
+
+  @doc """
+  Returns the JSON schema for the specified domain.
+  
+  ## Examples
+  
+      iex> schema = DecisionEngine.SignalsSchema.schema_for(:power_platform)
+      iex> schema["type"]
+      "object"
+  """
+  @spec schema_for(atom()) :: map()
+  def schema_for(domain) do
+    domain
+    |> module_for()
+    |> apply(:schema, [])
+  end
+
+  @doc """
+  Applies domain-specific defaults to signals.
+  
+  ## Examples
+  
+      iex> signals = %{"workload_type" => "user_productivity"}
+      iex> DecisionEngine.SignalsSchema.apply_defaults(:power_platform, signals)
+      %{"workload_type" => "user_productivity", "primary_users" => ["business_users"], ...}
+  """
+  @spec apply_defaults(atom(), map()) :: map()
+  def apply_defaults(domain, signals) do
+    domain
+    |> module_for()
+    |> apply(:apply_defaults, [signals])
+  end
+
+  @doc """
+  Returns all supported domains with their schema modules.
+  
+  ## Examples
+  
+      iex> DecisionEngine.SignalsSchema.supported_domains()
+      [
+        {:power_platform, DecisionEngine.SignalsSchema.PowerPlatform},
+        {:data_platform, DecisionEngine.SignalsSchema.DataPlatform},
+        {:integration_platform, DecisionEngine.SignalsSchema.IntegrationPlatform}
+      ]
+  """
+  @spec supported_domains() :: [{Types.domain(), module()}]
+  def supported_domains do
+    [
+      {:power_platform, PowerPlatform},
+      {:data_platform, DataPlatform},
+      {:integration_platform, IntegrationPlatform}
+    ]
+  end
+
+  @doc """
+  Discovers available domains dynamically from configuration files.
+  
+  For extensibility, this returns all domains with valid configurations,
+  regardless of schema module availability. Schema modules are optional
+  for basic domain functionality.
+  
+  ## Returns
+  - List of domain atoms that have valid configurations
+  
+  ## Examples
+      iex> DecisionEngine.SignalsSchema.discover_available_domains()
+      [:power_platform, :data_platform, :integration_platform]
+  """
+  @spec discover_available_domains() :: [Types.domain()]
+  def discover_available_domains do
+    # For extensibility, return all domains with valid configurations
+    Types.discover_domains()
+  end
+
+  @doc """
+  Checks if a schema module exists for the given domain.
+  
+  ## Parameters
+  - domain: The domain atom to check
+  
+  ## Returns
+  - true if schema module exists, false otherwise
+  """
+  @spec schema_module_exists?(atom()) :: boolean()
+  def schema_module_exists?(domain) do
+    try do
+      module = module_for(domain)
+      Code.ensure_loaded?(module) and function_exported?(module, :schema, 0)
+    rescue
+      _ -> false
+    end
+  end
+
+  @doc """
+  Validates that a domain has both configuration and schema support.
+  
+  ## Parameters
+  - domain: The domain atom to validate
+  
+  ## Returns
+  - :ok if domain is fully supported
+  - {:error, reason} if domain is missing components
+  """
+  @spec validate_domain_support(atom()) :: :ok | {:error, term()}
+  def validate_domain_support(domain) do
+    with :ok <- validate_config_exists(domain),
+         :ok <- validate_schema_module_exists(domain) do
+      :ok
+    end
+  end
+
+  defp validate_config_exists(domain) do
+    case DecisionEngine.RuleConfig.validate_domain_availability(domain) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:config_unavailable, domain, reason}}
+    end
+  end
+
+  defp validate_schema_module_exists(domain) do
+    if schema_module_exists?(domain) do
+      :ok
+    else
+      {:error, {:schema_module_missing, domain, module_for(domain)}}
+    end
+  end
+
+  # Backward compatibility - delegate to PowerPlatform for existing code
+  @doc false
+  def schema, do: PowerPlatform.schema()
+
+  @doc false
+  def apply_defaults(signals), do: PowerPlatform.apply_defaults(signals)
 end

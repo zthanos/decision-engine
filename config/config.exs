@@ -38,6 +38,11 @@ config :logger, :console,
   format: "$time $metadata[$level] $message\n",
   metadata: [:request_id]
 
+# Configure MIME types for Server-Sent Events
+config :mime, :types, %{
+  "text/event-stream" => ["sse"]
+}
+
 config :phoenix, :json_library, Jason
 
 import_config "#{config_env()}.exs"

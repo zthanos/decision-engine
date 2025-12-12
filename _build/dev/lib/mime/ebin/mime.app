@@ -2,7 +2,9 @@
              [{modules,['Elixir.MIME']},
               {compile_env,[{mime,[extensions],error},
                             {mime,[suffixes],error},
-                            {mime,[types],error}]},
+                            {mime,[types],
+                                  {ok,#{<<"text/event-stream">> =>
+                                            [<<"sse">>]}}}]},
               {optional_applications,[]},
               {applications,[kernel,stdlib,elixir,logger]},
               {description,"A MIME type module for Elixir"},

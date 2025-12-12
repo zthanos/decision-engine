@@ -45,9 +45,13 @@ defmodule DecisionEngine.MixProject do
       {:dns_cluster, "~> 0.1.1"},
       {:bandit, "~> 1.2"},
       {:req, "~> 0.4"},
+      {:finch, "~> 0.18"},
       {:gettext, "~> 0.24"},
       {:ex_json_schema, "~> 0.10"},
-      {:phoenix_live_reload, "~> 1.4", only: :dev}
+      {:earmark, "~> 1.4"},
+      {:html_sanitize_ex, "~> 1.4"},
+      {:phoenix_live_reload, "~> 1.4", only: :dev},
+      {:stream_data, "~> 0.6", only: :test}
     ]
   end
 

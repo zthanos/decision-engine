@@ -1,98 +1,45 @@
 # lib/decision_engine/rule_engine.ex
 defmodule DecisionEngine.RuleEngine do
   @moduledoc """
-  Evaluates decision rules based on extracted signals.
+  Evaluates decision rules based on extracted signals using domain-agnostic processing.
+  
+  The RuleEngine processes signals against configuration-driven patterns from any domain,
+  supporting generic condition evaluation with operators: in, intersects, not_intersects.
   """
 
-  @decision_patterns [
-    %{
-      id: "power_automate_good_fit",
-      outcome: "prefer_power_automate",
-      score: 0.9,
-      summary: "Use Power Automate as the primary automation platform.",
-      use_when: [
-        %{field: "workload_type", op: :in, value: ["user_productivity", "event_driven_business_process"]},
-        %{field: "primary_users", op: :intersects, value: ["citizen_developers", "business_users"]},
-        %{field: "target_systems", op: :intersects, value: ["m365", "dataverse", "dynamics_365", "public_saas"]},
-        %{field: "data_volume", op: :in, value: ["very_low", "low", "medium"]},
-        %{field: "latency_requirement", op: :in, value: ["human_scale_seconds_minutes"]},
-        %{field: "process_pattern", op: :intersects, value: ["approvals", "notifications", "document_flow", "human_workflow", "data_sync"]},
-        %{field: "complexity_level", op: :in, value: ["simple", "moderate"]},
-        %{field: "connectivity_needs", op: :not_intersects, value: ["private_azure_via_vnet"]}
-      ],
-      avoid_when: [
-        %{field: "availability_requirement", op: :in, value: ["mission_critical"]},
-        %{field: "devops_need", op: :in, value: ["full_enterprise_devops"]},
-        %{field: "workload_type", op: :in, value: ["data_pipeline"]}
-      ],
-      typical_use_cases: [
-        "Approval workflows on SharePoint / Teams / Outlook",
-        "Notification flows based on Microsoft 365 events",
-        "Lightweight data sync between Dataverse and SaaS systems",
-        "User-driven business processes initiated from Power Apps or M365"
-      ]
-    },
-    %{
-      id: "power_automate_possible_but_weaker_fit",
-      outcome: "power_automate_possible_with_caveats",
-      score: 0.6,
-      summary: "Power Automate can be used but may not be ideal; consider Logic Apps or other patterns if complexity grows.",
-      use_when: [
-        %{field: "workload_type", op: :in, value: ["event_driven_business_process", "system_integration"]},
-        %{field: "primary_users", op: :intersects, value: ["business_users", "pro_developers"]},
-        %{field: "data_volume", op: :in, value: ["medium"]},
-        %{field: "complexity_level", op: :in, value: ["moderate"]}
-      ],
-      avoid_when: [
-        %{field: "connectivity_needs", op: :intersects, value: ["private_azure_via_vnet"]},
-        %{field: "availability_requirement", op: :in, value: ["mission_critical"]}
-      ],
-      notes: [
-        "Suitable for PoC or interim solutions, with migration path to Logic Apps if integration complexity increases.",
-        "Recommend using managed connectors and limiting fan-out and parallel branches."
-      ]
-    },
-    %{
-      id: "prefer_logic_apps_or_other_integration",
-      outcome: "avoid_power_automate_use_logic_apps_or_integration_platform",
-      score: 0.95,
-      summary: "Do not use Power Automate as primary solution; prefer Logic Apps or other integration platform.",
-      use_when: [
-        %{field: "workload_type", op: :in, value: ["system_integration", "data_pipeline"]},
-        %{field: "data_volume", op: :in, value: ["high", "streaming"]},
-        %{field: "complexity_level", op: :in, value: ["complex"]},
-        %{field: "availability_requirement", op: :in, value: ["high", "mission_critical"]},
-        %{field: "devops_need", op: :in, value: ["full_enterprise_devops"]}
-      ],
-      recommended_alternatives: [
-        "Azure Logic Apps + API Management",
-        "Azure Functions + Service Bus / Event Grid",
-        "Dedicated integration platform (iPaaS) for high-throughput system-to-system flows"
-      ]
-    },
-    %{
-      id: "use_power_automate_for_rpa_desktop",
-      outcome: "use_power_automate_desktop",
-      score: 0.8,
-      summary: "Use Power Automate Desktop for RPA-style UI automation on legacy or desktop-only applications.",
-      use_when: [
-        %{field: "workload_type", op: :in, value: ["rpa_desktop"]},
-        %{field: "target_systems", op: :intersects, value: ["on_premises_systems", "line_of_business_api"]},
-        %{field: "data_volume", op: :in, value: ["very_low", "low"]}
-      ],
-      avoid_when: [
-        %{field: "data_volume", op: :in, value: ["high", "streaming"]},
-        %{field: "complexity_level", op: :in, value: ["complex"]}
-      ]
-    }
-  ]
+  alias DecisionEngine.Types
 
-  def evaluate(signals) do
+  @doc """
+  Evaluates signals against rule configuration patterns to determine the best recommendation.
+  
+  ## Parameters
+  
+    * `signals` - Map of extracted signals from user scenario
+    * `rule_config` - Domain-specific rule configuration containing patterns
+  
+  ## Returns
+  
+  A map containing the recommendation result with pattern matching details.
+  
+  ## Examples
+  
+      iex> signals = %{"workload_type" => "user_productivity"}
+      iex> rule_config = %{"patterns" => [%{"id" => "test", "outcome" => "test_outcome", ...}]}
+      iex> DecisionEngine.RuleEngine.evaluate(signals, rule_config)
+      %{pattern_id: "test", outcome: "test_outcome", ...}
+  """
+  @spec evaluate(map(), Types.rule_config()) :: map()
+  def evaluate(signals, rule_config) do
+    patterns = Map.get(rule_config, "patterns", [])
+    
     patterns_with_scores =
-      @decision_patterns
+      patterns
       |> Enum.map(fn pattern ->
-        use_when_score = evaluate_conditions(pattern.use_when, signals)
-        avoid_when_score = evaluate_conditions(Map.get(pattern, :avoid_when, []), signals)
+        use_when_conditions = Map.get(pattern, "use_when", [])
+        avoid_when_conditions = Map.get(pattern, "avoid_when", [])
+        
+        use_when_score = evaluate_conditions(use_when_conditions, signals)
+        avoid_when_score = evaluate_conditions(avoid_when_conditions, signals)
 
         # Pattern matches if all use_when conditions pass and no avoid_when conditions match
         match = use_when_score == 1.0 && avoid_when_score == 0.0
@@ -104,39 +51,62 @@ defmodule DecisionEngine.RuleEngine do
     best_match =
       patterns_with_scores
       |> Enum.filter(fn {_pattern, match, _, _} -> match end)
-      |> Enum.max_by(fn {pattern, _, _, _} -> pattern.score end, fn -> nil end)
+      |> Enum.max_by(fn {pattern, _, _, _} -> Map.get(pattern, "score", 0.0) end, fn -> nil end)
 
     case best_match do
       {pattern, true, _, _} ->
         %{
-          pattern_id: pattern.id,
-          outcome: pattern.outcome,
-          score: pattern.score,
-          summary: pattern.summary,
-          details: Map.take(pattern, [:typical_use_cases, :notes, :recommended_alternatives]),
+          pattern_id: Map.get(pattern, "id"),
+          outcome: Map.get(pattern, "outcome"),
+          score: Map.get(pattern, "score", 0.0),
+          summary: Map.get(pattern, "summary"),
+          details: extract_pattern_details(pattern),
           matched: true
         }
 
       nil ->
         # Fallback: return the pattern with highest partial match
-        {fallback_pattern, _, _use_score, _} =
-          patterns_with_scores
-          |> Enum.max_by(fn {pattern, _, use_score, avoid_score} ->
-            pattern.score * use_score * (1 - avoid_score)
-          end)
+        case patterns_with_scores do
+          [] ->
+            %{
+              pattern_id: nil,
+              outcome: "no_recommendation",
+              score: 0.0,
+              summary: "No patterns available for evaluation",
+              details: %{},
+              matched: false,
+              note: "No patterns found in rule configuration."
+            }
+          
+          _ ->
+            {fallback_pattern, _, _use_score, _avoid_score} =
+              patterns_with_scores
+              |> Enum.max_by(fn {pattern, _, use_score, avoid_score} ->
+                pattern_score = Map.get(pattern, "score", 0.0)
+                pattern_score * use_score * (1 - avoid_score)
+              end)
 
-        %{
-          pattern_id: fallback_pattern.id,
-          outcome: fallback_pattern.outcome,
-          score: fallback_pattern.score * 0.5,
-          summary: "Partial match: " <> fallback_pattern.summary,
-          details: Map.take(fallback_pattern, [:typical_use_cases, :notes, :recommended_alternatives]),
-          matched: false,
-          note: "No perfect match found. This is a partial recommendation."
-        }
+            %{
+              pattern_id: Map.get(fallback_pattern, "id"),
+              outcome: Map.get(fallback_pattern, "outcome"),
+              score: Map.get(fallback_pattern, "score", 0.0) * 0.5,
+              summary: "Partial match: " <> Map.get(fallback_pattern, "summary", ""),
+              details: extract_pattern_details(fallback_pattern),
+              matched: false,
+              note: "No perfect match found. This is a partial recommendation."
+            }
+        end
     end
   end
 
+  # Extract relevant details from pattern for result structure
+  defp extract_pattern_details(pattern) do
+    pattern
+    |> Map.take(["typical_use_cases", "notes", "recommended_alternatives"])
+    |> Enum.into(%{}, fn {k, v} -> {String.to_atom(k), v} end)
+  end
+
+  # Evaluate a list of conditions against signals, returning match percentage
   defp evaluate_conditions(conditions, signals) do
     if Enum.empty?(conditions) do
       0.0
@@ -151,21 +121,39 @@ defmodule DecisionEngine.RuleEngine do
     end
   end
 
+  # Evaluate a single condition against signals using generic operators
+  defp evaluate_condition(condition, signals) when is_map(condition) do
+    field = Map.get(condition, "field")
+    op = Map.get(condition, "op")
+    expected = Map.get(condition, "value")
+    
+    actual = Map.get(signals, field)
+    
+    evaluate_operator(op, actual, expected)
+  end
+  
+  # Handle legacy atom-based conditions for backward compatibility
   defp evaluate_condition(%{field: field, op: op, value: expected}, signals) do
     actual = Map.get(signals, field)
-
-    case op do
-      :in ->
-        actual in expected
-
-      :intersects ->
-        is_list(actual) && Enum.any?(actual, fn item -> item in expected end)
-
-      :not_intersects ->
-        !is_list(actual) || !Enum.any?(actual, fn item -> item in expected end)
-
-      _ ->
-        false
-    end
+    evaluate_operator(op, actual, expected)
   end
+  
+  defp evaluate_condition(_, _), do: false
+
+  # Generic operator evaluation supporting string and atom operators
+  defp evaluate_operator(op, actual, expected) when op in ["in", :in] do
+    is_list(expected) && actual in expected
+  end
+
+  defp evaluate_operator(op, actual, expected) when op in ["intersects", :intersects] do
+    is_list(actual) && is_list(expected) && 
+      Enum.any?(actual, fn item -> item in expected end)
+  end
+
+  defp evaluate_operator(op, actual, expected) when op in ["not_intersects", :not_intersects] do
+    !is_list(actual) || !is_list(expected) || 
+      !Enum.any?(actual, fn item -> item in expected end)
+  end
+
+  defp evaluate_operator(_, _, _), do: false
 end

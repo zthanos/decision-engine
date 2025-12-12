@@ -120,7 +120,9 @@ defmodule DecisionEngineWeb.DecisionLive.History do
                       <%= if result.justification do %>
                         <div>
                           <h4 class="font-semibold mb-2">Justification</h4>
-                          <p class="text-sm whitespace-pre-line"><%= result.justification %></p>
+                          <div class="text-sm prose prose-sm max-w-none">
+                            <%= raw(get_rendered_justification(result.justification)) %>
+                          </div>
                         </div>
                       <% end %>
                     </div>
@@ -135,8 +137,22 @@ defmodule DecisionEngineWeb.DecisionLive.History do
     """
   end
 
-  defp format_value(value) when is_list(value), do: Enum.join(value, ", ")
+  defp format_value(value) when is_list(value) do
+    value
+    |> Enum.map(&format_single_value/1)
+    |> Enum.join(", ")
+  end
+  defp format_value(value) when is_map(value), do: inspect(value)
   defp format_value(value), do: to_string(value)
+
+  defp format_single_value(value) when is_map(value), do: inspect(value)
+  defp format_single_value(value), do: to_string(value)
+
+  # Handle both new structured justification and legacy string justification
+  defp get_rendered_justification(%{rendered_html: html}), do: html
+  defp get_rendered_justification(justification) when is_binary(justification) do
+    DecisionEngine.MarkdownRenderer.render_to_html!(justification)
+  end
 
   defp get_outcome_badge_class(outcome) do
     case outcome do

@@ -11,11 +11,25 @@ defmodule DecisionEngineWeb.Router do
     plug :put_secure_browser_headers
   end
 
+  pipeline :api do
+    plug :accepts, ["json"]
+  end
+
+  pipeline :sse do
+    plug :accepts, ["sse"]
+  end
+
   scope "/", DecisionEngineWeb do
     pipe_through :browser
 
     live "/", DecisionLive.Index, :index
     live "/history", DecisionLive.History, :index
     live "/settings", DecisionLive.Settings, :index
+  end
+
+  scope "/api", DecisionEngineWeb do
+    pipe_through :sse
+
+    get "/stream/:session_id", SSEController, :stream
   end
 end
