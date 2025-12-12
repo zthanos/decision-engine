@@ -488,6 +488,34 @@ defmodule DecisionEngineWeb.SSEController do
 end
 ```
 
+### Domain Card Decision Table Component
+
+The domain management interface features enhanced domain cards with expandable decision tables that provide users with a quick visual overview of how each domain's decision patterns work.
+
+**Decision Table Features:**
+- **Pattern Overview**: Shows top 5 patterns for each domain with their outcomes and confidence scores
+- **Condition Visualization**: Displays key use_when and avoid_when conditions in a readable format
+- **Interactive Expansion**: Click to expand/collapse detailed pattern information
+- **Visual Indicators**: Color-coded conditions (green for use_when, red for avoid_when)
+- **Responsive Design**: Adapts to different screen sizes while maintaining readability
+
+**Decision Table Structure:**
+```
+Domain Card
+├── Domain Header (Name, Description)
+├── Quick Stats (# Patterns, # Signal Fields)
+├── Decision Table (Expandable)
+│   ├── Pattern Row 1: [Outcome] [Score] [Key Conditions]
+│   ├── Pattern Row 2: [Outcome] [Score] [Key Conditions]
+│   └── ... (up to 5 patterns)
+└── Action Buttons (Edit, Delete)
+```
+
+**Condition Display Format:**
+- Use When: `field_name IN [value1, value2]` (green indicator)
+- Avoid When: `field_name NOT_IN [value]` (red indicator)
+- Truncated values for long lists with "+N more" indicator
+
 ### DecisionEngine.DomainManager
 
 New component for managing domain configurations through the LiveView interface:
@@ -680,7 +708,7 @@ end
 
 ### DecisionEngineWeb.DomainManagementLive
 
-New LiveView for domain management interface:
+New LiveView for domain management interface with enhanced domain cards featuring decision tables:
 
 ```elixir
 defmodule DecisionEngineWeb.DomainManagementLive do
@@ -699,6 +727,7 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       |> assign(:form_mode, :list)
       |> assign(:form_data, %{})
       |> assign(:errors, [])
+      |> assign(:expanded_domain, nil)
     
     {:ok, socket}
   end
@@ -818,6 +847,18 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   end
   
   @impl true
+  def handle_event("toggle_domain_details", %{"domain" => domain_name}, socket) do
+    domain_atom = String.to_atom(domain_name)
+    
+    expanded_domain = case socket.assigns.expanded_domain do
+      ^domain_atom -> nil  # Collapse if already expanded
+      _ -> domain_atom     # Expand this domain
+    end
+    
+    {:noreply, assign(socket, :expanded_domain, expanded_domain)}
+  end
+  
+  @impl true
   def handle_event("add_signal_field", _params, socket) do
     form_data = socket.assigns.form_data
     updated_fields = form_data.signals_fields ++ [""]
@@ -885,6 +926,67 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     # This would parse the complex pattern form data
     patterns_data
   end
+  
+  # Helper function to generate decision table data for domain cards
+  def generate_decision_table(domain_config) do
+    patterns = domain_config.patterns
+    signal_fields = domain_config.signals_fields
+    
+    # Create a simplified decision matrix showing key patterns and their conditions
+    patterns
+    |> Enum.take(5)  # Limit to top 5 patterns for card display
+    |> Enum.map(fn pattern ->
+      %{
+        id: pattern["id"],
+        outcome: pattern["outcome"],
+        score: pattern["score"],
+        summary: String.slice(pattern["summary"], 0, 60) <> "...",
+        key_conditions: extract_key_conditions(pattern, signal_fields)
+      }
+    end)
+  end
+  
+  defp extract_key_conditions(pattern, signal_fields) do
+    use_when = pattern["use_when"] || []
+    avoid_when = pattern["avoid_when"] || []
+    
+    # Extract the most important conditions for display
+    key_use_conditions = 
+      use_when
+      |> Enum.take(2)  # Show top 2 use_when conditions
+      |> Enum.map(fn condition ->
+        %{
+          field: condition["field"],
+          operator: condition["op"],
+          value: format_condition_value(condition["value"]),
+          type: :use_when
+        }
+      end)
+    
+    key_avoid_conditions = 
+      avoid_when
+      |> Enum.take(1)  # Show top 1 avoid_when condition
+      |> Enum.map(fn condition ->
+        %{
+          field: condition["field"],
+          operator: condition["op"],
+          value: format_condition_value(condition["value"]),
+          type: :avoid_when
+        }
+      end)
+    
+    key_use_conditions ++ key_avoid_conditions
+  end
+  
+  defp format_condition_value(value) when is_list(value) do
+    case length(value) do
+      1 -> hd(value)
+      n when n <= 3 -> Enum.join(value, ", ")
+      _ -> "#{hd(value)}, ... (+#{length(value) - 1} more)"
+    end
+  end
+  
+  defp format_condition_value(value), do: to_string(value)
 end
 ```
 

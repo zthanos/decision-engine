@@ -25,6 +25,7 @@ defmodule DecisionEngineWeb.Router do
     live "/", DecisionLive.Index, :index
     live "/history", DecisionLive.History, :index
     live "/settings", DecisionLive.Settings, :index
+    live "/domains", DomainManagementLive, :index
   end
 
   scope "/api", DecisionEngineWeb do

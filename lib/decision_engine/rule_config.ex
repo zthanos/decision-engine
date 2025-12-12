@@ -88,6 +88,9 @@ defmodule DecisionEngine.RuleConfig do
     else
       Logger.info("Reloading configuration for domain: #{domain}")
       
+      # First invalidate the cache entry to ensure clean reload
+      invalidate_cache(domain)
+      
       case load_from_file(domain, bypass_cache: true) do
         {:ok, config} ->
           # Update cache with new configuration
@@ -104,6 +107,76 @@ defmodule DecisionEngine.RuleConfig do
   end
 
   @doc """
+  Reloads multiple domain configurations from files.
+  
+  Efficiently reloads multiple domains in a single operation with proper
+  cache management. This is useful for bulk configuration updates.
+  
+  ## Parameters
+  - domains: List of domain atoms to reload
+  
+  ## Returns
+  - {:ok, configs} with map of domain -> config on success
+  - {:error, failures} with map of domain -> error on failure
+  
+  ## Examples
+      iex> DecisionEngine.RuleConfig.reload_multiple([:power_platform, :data_platform])
+      {:ok, %{power_platform: %{...}, data_platform: %{...}}}
+  """
+  @spec reload_multiple([atom()]) :: {:ok, %{atom() => Types.rule_config()}} | {:error, %{atom() => term()}}
+  def reload_multiple(domains) when is_list(domains) do
+    Logger.info("Reloading configurations for domains: #{inspect(domains)}")
+    
+    # Validate all domains first
+    invalid_domains = Enum.reject(domains, &Types.domain_supported?/1)
+    
+    case invalid_domains do
+      [] ->
+        # Invalidate cache for all domains first
+        invalidate_cache(domains)
+        
+        # Reload each domain
+        results = 
+          domains
+          |> Enum.map(fn domain -> {domain, load_from_file(domain, bypass_cache: true)} end)
+        
+        # Separate successes and failures
+        {successes, failures} = 
+          results
+          |> Enum.split_with(fn {_domain, result} -> match?({:ok, _}, result) end)
+        
+        # Update cache for successful reloads
+        Enum.each(successes, fn {domain, {:ok, config}} ->
+          put_in_cache(domain, config)
+        end)
+        
+        case failures do
+          [] ->
+            success_map = 
+              successes
+              |> Enum.map(fn {domain, {:ok, config}} -> {domain, config} end)
+              |> Enum.into(%{})
+            
+            Logger.info("Successfully reloaded #{length(domains)} domains")
+            {:ok, success_map}
+          
+          _ ->
+            failure_map = 
+              failures
+              |> Enum.map(fn {domain, {:error, reason}} -> {domain, reason} end)
+              |> Enum.into(%{})
+            
+            Logger.error("Failed to reload some domains: #{inspect(failure_map)}")
+            {:error, failure_map}
+        end
+      
+      invalid ->
+        Logger.error("Invalid domains for reload: #{inspect(invalid)}")
+        {:error, Enum.map(invalid, fn domain -> {domain, :invalid_domain} end) |> Enum.into(%{})}
+    end
+  end
+
+  @doc """
   Clears the configuration cache.
   
   Forces all subsequent loads to read from file.
@@ -111,6 +184,39 @@ defmodule DecisionEngine.RuleConfig do
   @spec clear_cache() :: :ok
   def clear_cache do
     GenServer.call(__MODULE__, :clear_cache)
+  end
+
+  @doc """
+  Invalidates the cache for a specific domain or multiple domains.
+  
+  Forces the next load of the specified domain(s) to read from file.
+  This is more efficient than clearing the entire cache when only
+  specific domains' configurations have changed.
+  
+  ## Parameters
+  - domain: The domain atom to invalidate from cache
+  - domains: List of domain atoms to invalidate from cache
+  
+  ## Returns
+  - :ok always (operation is idempotent)
+  
+  ## Examples
+      iex> DecisionEngine.RuleConfig.invalidate_cache(:power_platform)
+      :ok
+      
+      iex> DecisionEngine.RuleConfig.invalidate_cache([:power_platform, :data_platform])
+      :ok
+  """
+  @spec invalidate_cache(atom() | [atom()]) :: :ok
+  def invalidate_cache(domains) when is_list(domains) do
+    GenServer.call(__MODULE__, {:invalidate_multiple, domains})
+  end
+  def invalidate_cache(domain) when is_atom(domain) do
+    GenServer.call(__MODULE__, {:invalidate, domain})
+  end
+  def invalidate_cache(domain) do
+    Logger.warning("Invalid domain for cache invalidation: #{inspect(domain)}")
+    :ok
   end
 
   @doc """
@@ -126,6 +232,169 @@ defmodule DecisionEngine.RuleConfig do
   def config_path(domain) do
     domain_string = Types.domain_to_string(domain)
     Path.join(@config_dir, "#{domain_string}.json")
+  end
+
+  @doc """
+  Gets cache statistics for monitoring and debugging.
+  
+  Returns information about the current state of the configuration cache
+  including cached domains and memory usage.
+  
+  ## Returns
+  - Map with cache statistics
+  
+  ## Examples
+      iex> DecisionEngine.RuleConfig.cache_stats()
+      %{
+        cached_domains: [:power_platform, :data_platform],
+        cache_size: 2,
+        memory_usage: 1024
+      }
+  """
+  @spec cache_stats() :: map()
+  def cache_stats do
+    GenServer.call(__MODULE__, :cache_stats)
+  end
+
+  @doc """
+  Checks if a domain is currently cached.
+  
+  ## Parameters
+  - domain: The domain atom to check
+  
+  ## Returns
+  - true if domain is cached, false otherwise
+  """
+  @spec cached?(atom()) :: boolean()
+  def cached?(domain) when is_atom(domain) do
+    case get_from_cache(domain) do
+      {:ok, _} -> true
+      :not_found -> false
+    end
+  end
+  def cached?(_), do: false
+
+  @doc """
+  Preloads configurations for multiple domains into cache.
+  
+  Efficiently loads multiple domain configurations into cache in a single
+  operation. This is useful for warming the cache at application startup.
+  
+  ## Parameters
+  - domains: List of domain atoms to preload
+  
+  ## Returns
+  - {:ok, loaded_domains} on success
+  - {:error, failed_domains} on failure
+  
+  ## Examples
+      iex> DecisionEngine.RuleConfig.preload_cache([:power_platform, :data_platform])
+      {:ok, [:power_platform, :data_platform]}
+  """
+  @spec preload_cache([atom()]) :: {:ok, [atom()]} | {:error, [{atom(), term()}]}
+  def preload_cache(domains) when is_list(domains) do
+    Logger.info("Preloading cache for domains: #{inspect(domains)}")
+    
+    results = 
+      domains
+      |> Enum.map(fn domain -> {domain, load(domain)} end)
+    
+    {successes, failures} = 
+      results
+      |> Enum.split_with(fn {_domain, result} -> match?({:ok, _}, result) end)
+    
+    success_domains = Enum.map(successes, fn {domain, _} -> domain end)
+    failed_domains = Enum.map(failures, fn {domain, {:error, reason}} -> {domain, reason} end)
+    
+    case failed_domains do
+      [] ->
+        Logger.info("Successfully preloaded #{length(success_domains)} domains")
+        {:ok, success_domains}
+      
+      failures ->
+        Logger.error("Failed to preload some domains: #{inspect(failures)}")
+        {:error, failures}
+    end
+  end
+
+  @doc """
+  Handles configuration file changes for dynamic reloading.
+  
+  This function can be called when configuration files are modified
+  to automatically reload the affected domain configurations.
+  
+  ## Parameters
+  - file_path: Path to the configuration file that changed
+  
+  ## Returns
+  - {:ok, domain} if domain was successfully reloaded
+  - {:error, reason} if reload failed
+  - :ignored if file is not a domain configuration
+  
+  ## Examples
+      iex> DecisionEngine.RuleConfig.handle_file_change("priv/rules/power_platform.json")
+      {:ok, :power_platform}
+  """
+  @spec handle_file_change(String.t()) :: {:ok, atom()} | {:error, term()} | :ignored
+  def handle_file_change(file_path) when is_binary(file_path) do
+    case extract_domain_from_path(file_path) do
+      {:ok, domain} ->
+        Logger.info("Configuration file changed for domain: #{domain}")
+        
+        case reload(domain) do
+          {:ok, _config} ->
+            Logger.info("Successfully reloaded domain after file change: #{domain}")
+            {:ok, domain}
+          
+          {:error, reason} = error ->
+            Logger.error("Failed to reload domain after file change: #{domain}, reason: #{inspect(reason)}")
+            error
+        end
+      
+      :not_domain_config ->
+        Logger.debug("Ignoring file change for non-domain configuration: #{file_path}")
+        :ignored
+    end
+  end
+
+  @doc """
+  Validates cache consistency across all cached domains.
+  
+  Checks that all cached configurations are still valid and consistent
+  with their corresponding files. This is useful for detecting cache
+  corruption or file system changes.
+  
+  ## Returns
+  - {:ok, valid_domains} if all cached domains are consistent
+  - {:error, inconsistent_domains} if inconsistencies are found
+  """
+  @spec validate_cache_consistency() :: {:ok, [atom()]} | {:error, [{atom(), term()}]}
+  def validate_cache_consistency do
+    Logger.info("Validating cache consistency")
+    
+    stats = cache_stats()
+    cached_domains = stats.cached_domains
+    
+    results = 
+      cached_domains
+      |> Enum.map(fn domain -> {domain, validate_domain_cache_consistency(domain)} end)
+    
+    {valid, invalid} = 
+      results
+      |> Enum.split_with(fn {_domain, result} -> result == :ok end)
+    
+    valid_domains = Enum.map(valid, fn {domain, _} -> domain end)
+    invalid_domains = Enum.map(invalid, fn {domain, {:error, reason}} -> {domain, reason} end)
+    
+    case invalid_domains do
+      [] ->
+        Logger.info("Cache consistency validation passed for #{length(valid_domains)} domains")
+        {:ok, valid_domains}
+      
+      inconsistencies ->
+        Logger.warning("Cache consistency validation found issues: #{inspect(inconsistencies)}")
+        {:error, inconsistencies}
+    end
   end
 
   @doc """
@@ -376,6 +645,53 @@ defmodule DecisionEngine.RuleConfig do
     end
   end
 
+  defp extract_domain_from_path(file_path) do
+    case Path.basename(file_path) do
+      filename when is_binary(filename) ->
+        case String.split(filename, ".") do
+          [domain_name, "json"] ->
+            domain_atom = String.to_atom(domain_name)
+            
+            # Verify this is actually a domain configuration file in the right directory
+            expected_path = config_path(domain_atom)
+            
+            if Path.expand(file_path) == Path.expand(expected_path) do
+              {:ok, domain_atom}
+            else
+              :not_domain_config
+            end
+          
+          _ ->
+            :not_domain_config
+        end
+      
+      _ ->
+        :not_domain_config
+    end
+  end
+
+  defp validate_domain_cache_consistency(domain) do
+    case get_from_cache(domain) do
+      {:ok, cached_config} ->
+        # Load from file and compare
+        case load_from_file(domain, bypass_cache: true) do
+          {:ok, file_config} ->
+            if cached_config == file_config do
+              :ok
+            else
+              {:error, :cache_file_mismatch}
+            end
+          
+          {:error, reason} ->
+            {:error, {:file_load_failed, reason}}
+        end
+      
+      :not_found ->
+        # This shouldn't happen if we're checking cached domains
+        {:error, :not_in_cache}
+    end
+  end
+
   ## GenServer Callbacks
 
   @impl true
@@ -400,6 +716,41 @@ defmodule DecisionEngine.RuleConfig do
     :ets.delete_all_objects(@cache_table)
     Logger.info("RuleConfig cache cleared")
     {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:invalidate, domain}, _from, state) do
+    :ets.delete(@cache_table, domain)
+    Logger.debug("Invalidated cache for domain: #{domain}")
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:invalidate_multiple, domains}, _from, state) do
+    Enum.each(domains, fn domain ->
+      :ets.delete(@cache_table, domain)
+    end)
+    Logger.debug("Invalidated cache for domains: #{inspect(domains)}")
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call(:cache_stats, _from, state) do
+    cached_domains = :ets.tab2list(@cache_table) |> Enum.map(fn {domain, _} -> domain end)
+    cache_size = length(cached_domains)
+    
+    # Get memory usage information
+    memory_info = :ets.info(@cache_table, :memory)
+    memory_usage = if memory_info, do: memory_info * :erlang.system_info(:wordsize), else: 0
+    
+    stats = %{
+      cached_domains: cached_domains,
+      cache_size: cache_size,
+      memory_usage: memory_usage,
+      table_info: :ets.info(@cache_table)
+    }
+    
+    {:reply, stats, state}
   end
 
   @impl true

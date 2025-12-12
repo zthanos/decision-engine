@@ -36,9 +36,23 @@ defmodule DecisionEngineWeb.DecisionLive.History do
     <div class="min-h-screen bg-base-200">
       <div class="navbar bg-primary text-primary-content shadow-lg">
         <div class="flex-1">
-          <.nav_link navigate="/" class="btn btn-ghost text-xl">
-            <span class="hero-arrow-left w-6 h-6 mr-2"></span>
-            Back to Decision Engine
+          <a href="/" class="btn btn-ghost text-xl">
+            <span class="hero-sparkles w-6 h-6 mr-2"></span>
+            Decision Engine
+          </a>
+        </div>
+        <div class="flex-none gap-2">
+          <.nav_link navigate="/" class="btn btn-ghost btn-sm">
+            <span class="hero-home w-5 h-5"></span>
+            Home
+          </.nav_link>
+          <.nav_link navigate="/domains" class="btn btn-ghost btn-sm">
+            <span class="hero-building-office w-5 h-5"></span>
+            Domains
+          </.nav_link>
+          <.nav_link navigate="/settings" class="btn btn-ghost btn-sm">
+            <span class="hero-cog-6-tooth w-5 h-5"></span>
+            Settings
           </.nav_link>
         </div>
       </div>

@@ -20,6 +20,7 @@
           'Elixir.DecisionEngineWeb.DecisionLive.History',
           'Elixir.DecisionEngineWeb.DecisionLive.Index',
           'Elixir.DecisionEngineWeb.DecisionLive.Settings',
+          'Elixir.DecisionEngineWeb.DomainManagementLive',
           'Elixir.DecisionEngineWeb.Endpoint',
           'Elixir.DecisionEngineWeb.ErrorHTML',
           'Elixir.DecisionEngineWeb.Gettext',

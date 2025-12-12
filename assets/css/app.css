@@ -214,3 +214,290 @@
   border-radius: 0.25em;
   font-size: 0.875em;
 }
+
+/* Domain Management Styles */
+.domain-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.domain-card:hover {
+  transform: translateY(-2px);
+}
+
+.decision-table-container {
+  animation: fadeInDown 0.3s ease-out;
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Signal Fields Container */
+.signal-fields-container .signal-field-row {
+  transition: all 0.2s ease;
+}
+
+.signal-fields-container .signal-field-row:hover {
+  transform: translateX(4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Pattern Cards */
+.patterns-container .pattern-card {
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.patterns-container .pattern-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, 
+    hsl(var(--s)) 0%, 
+    hsl(var(--p)) 50%, 
+    hsl(var(--a)) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.patterns-container .pattern-card:hover::before {
+  opacity: 1;
+}
+
+.patterns-container .pattern-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+}
+
+/* Enhanced Decision Table Styling */
+.decision-table-container .decision-pattern-card {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.decision-table-container .decision-pattern-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, 
+    hsl(var(--p)) 0%, 
+    hsl(var(--s)) 50%, 
+    hsl(var(--a)) 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.decision-table-container .decision-pattern-card:hover::before {
+  opacity: 1;
+}
+
+.decision-table-container .decision-pattern-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+}
+
+/* Condition Groups */
+.condition-group {
+  transition: all 0.2s ease;
+}
+
+.condition-item {
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.condition-item:hover {
+  transform: translateX(2px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Enhanced Badge Styling */
+.badge.badge-primary.badge-lg {
+  font-size: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+}
+
+/* Condition Badge Enhancements */
+.badge.badge-success.badge-sm,
+.badge.badge-error.badge-sm {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.25rem 0.5rem;
+}
+
+/* Use Case Badges */
+.badge.badge-outline.badge-xs {
+  transition: all 0.2s ease;
+  border-width: 1px;
+}
+
+.badge.badge-outline.badge-xs:hover {
+  transform: scale(1.05);
+  background-color: hsl(var(--p) / 0.1);
+  border-color: hsl(var(--p));
+}
+
+/* Radial Progress Custom Styling */
+.radial-progress {
+  --thickness: 3px;
+}
+
+.radial-progress[style*="--value:0"],
+.radial-progress[style*="--value:10"],
+.radial-progress[style*="--value:20"] {
+  --color: hsl(var(--er));
+}
+
+.radial-progress[style*="--value:30"],
+.radial-progress[style*="--value:40"],
+.radial-progress[style*="--value:50"] {
+  --color: hsl(var(--wa));
+}
+
+.radial-progress[style*="--value:60"],
+.radial-progress[style*="--value:70"],
+.radial-progress[style*="--value:80"],
+.radial-progress[style*="--value:90"],
+.radial-progress[style*="--value:100"] {
+  --color: hsl(var(--su));
+}
+
+/* Condition Badges */
+.badge.badge-success {
+  --tw-bg-opacity: 0.2;
+  border: 1px solid hsl(var(--su));
+}
+
+.badge.badge-error {
+  --tw-bg-opacity: 0.2;
+  border: 1px solid hsl(var(--er));
+}
+
+/* Form Enhancements */
+.form-control input:focus,
+.form-control textarea:focus,
+.form-control select:focus {
+  transform: scale(1.02);
+  transition: transform 0.2s ease;
+}
+
+/* Range Slider Styling */
+.range.range-secondary::-webkit-slider-thumb {
+  background: hsl(var(--s));
+  border: 2px solid hsl(var(--b1));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.range.range-secondary::-moz-range-thumb {
+  background: hsl(var(--s));
+  border: 2px solid hsl(var(--b1));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Stats Component Enhancement */
+.stats.stats-horizontal .stat {
+  border-right: 1px solid hsl(var(--b3));
+}
+
+.stats.stats-horizontal .stat:last-child {
+  border-right: none;
+}
+
+/* Dropdown Menu Styling */
+.dropdown-content {
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+  border: 1px solid hsl(var(--b3));
+}
+
+.dropdown-content li > * {
+  transition: all 0.2s ease;
+}
+
+.dropdown-content li > *:hover {
+  transform: translateX(4px);
+}
+
+/* Modal Enhancements */
+.modal-box {
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25);
+  border: 1px solid hsl(var(--b3));
+}
+
+/* Responsive Design Helpers */
+@media (max-width: 768px) {
+  .domain-card {
+    margin-bottom: 1rem;
+  }
+  
+  .decision-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .patterns-container .pattern-card {
+    padding: 1rem;
+  }
+  
+  .signal-fields-container .signal-field-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+}
+
+/* Loading States */
+.loading-domain-card {
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Success/Error State Indicators */
+.form-success {
+  border-color: hsl(var(--su));
+  box-shadow: 0 0 0 2px hsl(var(--su) / 0.2);
+}
+
+.form-error {
+  border-color: hsl(var(--er));
+  box-shadow: 0 0 0 2px hsl(var(--er) / 0.2);
+}

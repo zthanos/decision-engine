@@ -5,6 +5,13 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
 
   @impl true
   def mount(_params, _session, socket) do
+    # Load available domains dynamically
+    available_domains = DecisionEngine.DomainManager.list_available_domains()
+    default_domain = if :power_platform in available_domains, do: :power_platform, else: List.first(available_domains)
+
+    # Subscribe to domain changes for real-time updates
+    Phoenix.PubSub.subscribe(DecisionEngine.PubSub, "domain_changes")
+
     {:ok,
      socket
      |> assign(:scenario, "")
@@ -14,7 +21,8 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
      |> assign(:provider, "ollama")
      |> assign(:api_key, "")
      |> assign(:model, "ministral-3:3b")
-     |> assign(:domain, :power_platform)
+     |> assign(:domain, default_domain)
+     |> assign(:available_domains, available_domains)
      |> assign(:streaming_enabled, false)
      |> assign(:streaming_session_id, nil)
      |> assign(:streaming_result, nil)
@@ -58,8 +66,14 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     Logger.info("Domain selection changed to: #{domain_string}")
     case DecisionEngine.Types.string_to_domain(domain_string) do
       {:ok, domain} ->
-        Logger.info("Successfully updated domain to: #{domain}")
-        {:noreply, assign(socket, :domain, domain)}
+        # Verify domain is available
+        if domain in socket.assigns.available_domains do
+          Logger.info("Successfully updated domain to: #{domain}")
+          {:noreply, assign(socket, :domain, domain)}
+        else
+          Logger.error("Domain not available: #{domain_string}")
+          {:noreply, assign(socket, :error, "Domain not available: #{domain_string}")}
+        end
       {:error, :invalid_domain} ->
         Logger.error("Invalid domain selected: #{domain_string}")
         {:noreply, assign(socket, :error, "Invalid domain selected: #{domain_string}")}
@@ -85,7 +99,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     if String.trim(scenario) == "" do
       {:noreply, assign(socket, error: "Please enter a scenario")}
     else
-      socket = 
+      socket =
         socket
         |> assign(:processing, true)
         |> assign(:error, nil)
@@ -96,12 +110,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
       if socket.assigns.streaming_enabled do
         # Process with streaming
         session_id = generate_session_id()
-        
+
         socket = assign(socket, :streaming_session_id, session_id)
-        
+
         # Send event to client to establish SSE connection first
         socket = push_event(socket, "establish_sse", %{session_id: session_id})
-        
+
         # Start processing after allowing time for SSE connection
         pid = self()
         Task.start(fn ->
@@ -142,21 +156,21 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
   @impl true
   def handle_event("streaming_complete", %{"session_id" => session_id, "final_content" => final_content, "final_html" => final_html}, socket) do
     Logger.info("Streaming complete for session: #{session_id}")
-    
+
     # Update the streaming result with final content
     if socket.assigns.streaming_session_id == session_id do
       streaming_result = socket.assigns.streaming_result
-      
+
       if streaming_result do
         # Update justification with final content
         updated_result = put_in(streaming_result, [:justification], %{
           raw_markdown: final_content,
           rendered_html: final_html
         })
-        
+
         # Save to history
         save_to_history(updated_result)
-        
+
         {:noreply,
          socket
          |> assign(:processing, false)
@@ -175,7 +189,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
   @impl true
   def handle_event("streaming_error", %{"session_id" => session_id, "error" => error}, socket) do
     Logger.error("Streaming error for session #{session_id}: #{error}")
-    
+
     if socket.assigns.streaming_session_id == session_id do
       {:noreply,
        socket
@@ -211,7 +225,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
   @impl true
   def handle_info({:process_streaming_started, {:ok, result}}, socket) do
     Logger.info("Streaming started successfully")
-    
+
     {:noreply,
      socket
      |> assign(:streaming_result, result)}
@@ -220,13 +234,45 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
   @impl true
   def handle_info({:process_streaming_started, {:error, reason}}, socket) do
     Logger.error("Failed to start streaming: #{reason}")
-    
+
     {:noreply,
      socket
      |> assign(:processing, false)
      |> assign(:error, "Failed to start streaming: #{reason}")
      |> assign(:streaming_result, nil)
      |> assign(:streaming_session_id, nil)}
+  end
+
+  @impl true
+  def handle_info({:domain_changed, _domain}, socket) do
+    # Reload available domains when domain changes occur
+    available_domains = DecisionEngine.DomainManager.list_available_domains()
+
+    # Check if current domain is still available
+    current_domain = socket.assigns.domain
+    updated_domain = if current_domain in available_domains do
+      current_domain
+    else
+      # Fall back to first available domain if current is no longer available
+      List.first(available_domains) || :power_platform
+    end
+
+    {:noreply,
+     socket
+     |> assign(:available_domains, available_domains)
+     |> assign(:domain, updated_domain)}
+  end
+
+  @impl true
+  def handle_info({:domain_added, domain}, socket) do
+    Logger.info("Domain added: #{domain}")
+    handle_info({:domain_changed, domain}, socket)
+  end
+
+  @impl true
+  def handle_info({:domain_removed, domain}, socket) do
+    Logger.info("Domain removed: #{domain}")
+    handle_info({:domain_changed, domain}, socket)
   end
 
   defp process_scenario(scenario, assigns) do
@@ -314,6 +360,10 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
           </a>
         </div>
         <div class="flex-none gap-2">
+          <.nav_link navigate="/domains" class="btn btn-ghost btn-sm">
+            <span class="hero-building-office w-5 h-5"></span>
+            Domains
+          </.nav_link>
           <.nav_link navigate="/history" class="btn btn-ghost btn-sm">
             <span class="hero-clock w-5 h-5"></span>
             History
@@ -366,10 +416,10 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                       <div class="form-control">
                         <label class="label cursor-pointer gap-2">
                           <span class="label-text text-sm">Stream response</span>
-                          <input 
+                          <input
                             id="streaming-toggle"
-                            type="checkbox" 
-                            class="toggle toggle-primary toggle-sm" 
+                            type="checkbox"
+                            class="toggle toggle-primary toggle-sm"
                             phx-hook="StreamingToggle"
                             checked={@streaming_enabled}
                           />
@@ -400,73 +450,14 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                 <!-- Example Scenarios -->
                 <div class="divider">Quick Examples</div>
                 <div class="flex flex-wrap gap-2">
-                  <%= case @domain do %>
-                    <% :power_platform -> %>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Automate approval process for SharePoint documents with Teams notifications and Dataverse updates. Built by business users."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Approval Flow
-                      </button>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Create a Power App for field workers to submit maintenance requests with photo attachments and automatic routing."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Mobile App
-                      </button>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Automate invoice processing from email attachments with AI Builder and approval workflows in Teams."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Document Processing
-                      </button>
-                    <% :data_platform -> %>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Process high-volume streaming data from IoT devices to Azure Data Lake with complex transformations and mission-critical availability."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Data Pipeline
-                      </button>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Build real-time analytics dashboard consuming data from multiple databases with sub-second latency requirements."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Real-time Analytics
-                      </button>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Implement data warehouse solution with daily ETL from 20+ source systems and complex business rules."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Data Warehouse
-                      </button>
-                    <% :integration_platform -> %>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Sync customer data from Dynamics 365 to external SaaS API on record updates. High reliability required, maintained by pro developers."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Data Sync
-                      </button>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Integrate legacy mainframe system with modern web APIs using message queues and transformation logic."
-                        class="btn btn-sm btn-outline"
-                      >
-                        Legacy Integration
-                      </button>
-                      <button
-                        phx-click="use_example"
-                        phx-value-scenario="Build API gateway with authentication, rate limiting, and routing to microservices architecture."
-                        class="btn btn-sm btn-outline"
-                      >
-                        API Gateway
-                      </button>
+                  <%= for example <- get_domain_examples(@domain) do %>
+                    <button
+                      phx-click="use_example"
+                      phx-value-scenario={example.scenario}
+                      class="btn btn-sm btn-outline"
+                    >
+                      <%= example.title %>
+                    </button>
                   <% end %>
                 </div>
               </div>
@@ -494,7 +485,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
 
                   <%= if @result || (@streaming_result && @streaming_result.decision) do %>
                     <% current_result = @result || @streaming_result %>
-                    
+
                     <!-- Decision Badge -->
                     <div class="alert alert-success shadow-lg">
                       <span class="hero-check-circle w-6 h-6"></span>
@@ -537,12 +528,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                           <span class="loading loading-dots loading-sm ml-2"></span>
                         <% end %>
                       </h3>
-                      
+
                       <%= if @streaming_result && @processing do %>
                         <!-- Streaming Content -->
-                        <div 
+                        <div
                           id={"streaming-result-#{@streaming_session_id}"}
-                          phx-hook="StreamingResult" 
+                          phx-hook="StreamingResult"
                           data-session-id={@streaming_session_id}
                           data-streaming="true"
                           class="relative"
@@ -626,9 +617,11 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                       class="select select-bordered"
                       name="domain"
                     >
-                      <option value="power_platform" selected={@domain == :power_platform}>Power Platform</option>
-                      <option value="data_platform" selected={@domain == :data_platform}>Data Platform</option>
-                      <option value="integration_platform" selected={@domain == :integration_platform}>Integration Platform</option>
+                      <%= for domain <- @available_domains do %>
+                        <option value={domain} selected={@domain == domain}>
+                          <%= format_domain_name(domain) %>
+                        </option>
+                      <% end %>
                     </select>
                   </div>
                 </form>
@@ -636,14 +629,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                 <div class="alert alert-info mt-4">
                   <span class="hero-information-circle w-5 h-5"></span>
                   <span class="text-xs">
-                    <%= case @domain do %>
-                      <% :power_platform -> %>
-                        Optimized for Power Automate, Power Apps, and business user scenarios
-                      <% :data_platform -> %>
-                        Optimized for data processing, ETL, and analytics workloads
-                      <% :integration_platform -> %>
-                        Optimized for system integration and API connectivity scenarios
-                    <% end %>
+                    <%= get_domain_description(@domain) %>
                   </span>
                 </div>
               </div>
@@ -791,6 +777,44 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
       :data_platform -> "Data Platform"
       :integration_platform -> "Integration Platform"
       _ -> domain |> Atom.to_string() |> String.replace("_", " ") |> String.capitalize()
+    end
+  end
+
+  defp get_domain_description(domain) do
+    case DecisionEngine.DomainManager.get_domain(domain) do
+      {:ok, domain_config} ->
+        domain_config.description
+      {:error, _} ->
+        # Fallback to hardcoded descriptions for core domains
+        case domain do
+          :power_platform -> "Optimized for Power Automate, Power Apps, and business user scenarios"
+          :data_platform -> "Optimized for data processing, ETL, and analytics workloads"
+          :integration_platform -> "Optimized for system integration and API connectivity scenarios"
+          _ -> "Custom domain for specialized decision scenarios"
+        end
+    end
+  end
+
+  defp get_domain_examples(domain) do
+    case domain do
+      :power_platform -> [
+        %{title: "Approval Flow", scenario: "Automate approval process for SharePoint documents with Teams notifications and Dataverse updates. Built by business users."},
+        %{title: "Mobile App", scenario: "Create a Power App for field workers to submit maintenance requests with photo attachments and automatic routing."},
+        %{title: "Document Processing", scenario: "Automate invoice processing from email attachments with AI Builder and approval workflows in Teams."}
+      ]
+      :data_platform -> [
+        %{title: "Data Pipeline", scenario: "Process high-volume streaming data from IoT devices to Azure Data Lake with complex transformations and mission-critical availability."},
+        %{title: "Real-time Analytics", scenario: "Build real-time analytics dashboard consuming data from multiple databases with sub-second latency requirements."},
+        %{title: "Data Warehouse", scenario: "Implement data warehouse solution with daily ETL from 20+ source systems and complex business rules."}
+      ]
+      :integration_platform -> [
+        %{title: "Data Sync", scenario: "Sync customer data from Dynamics 365 to external SaaS API on record updates. High reliability required, maintained by pro developers."},
+        %{title: "Legacy Integration", scenario: "Integrate legacy mainframe system with modern web APIs using message queues and transformation logic."},
+        %{title: "API Gateway", scenario: "Build API gateway with authentication, rate limiting, and routing to microservices architecture."}
+      ]
+      _ -> [
+        %{title: "Custom Scenario", scenario: "Describe your specific use case for the #{format_domain_name(domain)} domain."}
+      ]
     end
   end
 

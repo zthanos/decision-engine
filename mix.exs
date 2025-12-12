@@ -51,7 +51,8 @@ defmodule DecisionEngine.MixProject do
       {:earmark, "~> 1.4"},
       {:html_sanitize_ex, "~> 1.4"},
       {:phoenix_live_reload, "~> 1.4", only: :dev},
-      {:stream_data, "~> 0.6", only: :test}
+      {:stream_data, "~> 0.6", only: :test},
+      {:floki, ">= 0.30.0", only: :test}
     ]
   end
 
