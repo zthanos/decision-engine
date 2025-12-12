@@ -1,0 +1,79 @@
+{
+  "domain": "power_platform",
+  "signals_fields": [
+    "workload_type",
+    "primary_users",
+    "trigger_nature",
+    "data_sources",
+    "integration_complexity",
+    "availability_requirement",
+    "compliance_requirements",
+    "expected_volume",
+    "user_interaction_pattern"
+  ],
+  "patterns": [
+    {
+      "id": "power_automate_good_fit",
+      "outcome": "prefer_power_automate",
+      "score": 0.9,
+      "summary": "Use Power Automate as the primary automation platform",
+      "use_when": [
+        {"field": "workload_type", "op": "in", "value": ["user_productivity", "event_driven_business_process"]},
+        {"field": "primary_users", "op": "intersects", "value": ["business_users", "citizen_developers"]},
+        {"field": "integration_complexity", "op": "in", "value": ["low", "medium"]}
+      ],
+      "avoid_when": [
+        {"field": "availability_requirement", "op": "in", "value": ["mission_critical"]},
+        {"field": "expected_volume", "op": "in", "value": ["very_high"]}
+      ],
+      "typical_use_cases": [
+        "Approval workflows on SharePoint",
+        "Notification flows based on M365 events",
+        "Simple data synchronization between Office apps",
+        "Document processing workflows"
+      ]
+    },
+    {
+      "id": "power_apps_recommended",
+      "outcome": "prefer_power_apps",
+      "score": 0.85,
+      "summary": "Build custom applications using Power Apps",
+      "use_when": [
+        {"field": "workload_type", "op": "in", "value": ["user_productivity"]},
+        {"field": "user_interaction_pattern", "op": "in", "value": ["form_based", "dashboard"]},
+        {"field": "primary_users", "op": "intersects", "value": ["business_users", "citizen_developers"]}
+      ],
+      "avoid_when": [
+        {"field": "integration_complexity", "op": "in", "value": ["high"]},
+        {"field": "compliance_requirements", "op": "intersects", "value": ["strict_data_governance"]}
+      ],
+      "typical_use_cases": [
+        "Custom forms for data collection",
+        "Mobile apps for field workers",
+        "Simple reporting dashboards",
+        "Inventory management applications"
+      ]
+    },
+    {
+      "id": "azure_logic_apps_enterprise",
+      "outcome": "prefer_azure_logic_apps",
+      "score": 0.95,
+      "summary": "Use Azure Logic Apps for enterprise-grade integration",
+      "use_when": [
+        {"field": "availability_requirement", "op": "in", "value": ["mission_critical", "high"]},
+        {"field": "integration_complexity", "op": "in", "value": ["high"]},
+        {"field": "expected_volume", "op": "in", "value": ["high", "very_high"]}
+      ],
+      "avoid_when": [
+        {"field": "primary_users", "op": "in", "value": ["business_users"]},
+        {"field": "integration_complexity", "op": "in", "value": ["low"]}
+      ],
+      "typical_use_cases": [
+        "Enterprise system integrations",
+        "High-volume data processing",
+        "Mission-critical business processes",
+        "Complex B2B integrations"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+# Elixir/Phoenix
+_build/
+deps/
+*.ez
+erl_crash.dump
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Assets
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Static assets
+priv/static/assets/
+priv/static/cache_manifest.json
+
+# Test
+/_build/test/
+/test/

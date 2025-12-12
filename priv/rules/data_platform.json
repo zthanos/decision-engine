@@ -1,0 +1,101 @@
+{
+  "domain": "data_platform",
+  "signals_fields": [
+    "data_volume",
+    "data_velocity",
+    "data_variety",
+    "processing_type",
+    "latency_requirements",
+    "consistency_requirements",
+    "analytics_needs",
+    "storage_duration",
+    "compliance_requirements",
+    "budget_constraints"
+  ],
+  "patterns": [
+    {
+      "id": "azure_synapse_analytics",
+      "outcome": "prefer_azure_synapse",
+      "score": 0.9,
+      "summary": "Use Azure Synapse Analytics for enterprise data warehousing",
+      "use_when": [
+        {"field": "data_volume", "op": "in", "value": ["large", "very_large"]},
+        {"field": "processing_type", "op": "in", "value": ["batch", "mixed"]},
+        {"field": "analytics_needs", "op": "intersects", "value": ["business_intelligence", "data_warehousing"]}
+      ],
+      "avoid_when": [
+        {"field": "latency_requirements", "op": "in", "value": ["real_time"]},
+        {"field": "budget_constraints", "op": "in", "value": ["very_low"]}
+      ],
+      "typical_use_cases": [
+        "Enterprise data warehouse modernization",
+        "Large-scale analytics workloads",
+        "Historical data analysis",
+        "Business intelligence reporting"
+      ]
+    },
+    {
+      "id": "azure_data_factory",
+      "outcome": "prefer_azure_data_factory",
+      "score": 0.85,
+      "summary": "Use Azure Data Factory for data integration and ETL",
+      "use_when": [
+        {"field": "processing_type", "op": "in", "value": ["etl", "batch"]},
+        {"field": "data_variety", "op": "in", "value": ["structured", "mixed"]},
+        {"field": "data_volume", "op": "in", "value": ["medium", "large"]}
+      ],
+      "avoid_when": [
+        {"field": "latency_requirements", "op": "in", "value": ["real_time"]},
+        {"field": "processing_type", "op": "in", "value": ["streaming"]}
+      ],
+      "typical_use_cases": [
+        "Data migration projects",
+        "Scheduled data processing",
+        "Multi-source data integration",
+        "Data transformation pipelines"
+      ]
+    },
+    {
+      "id": "azure_stream_analytics",
+      "outcome": "prefer_stream_analytics",
+      "score": 0.88,
+      "summary": "Use Azure Stream Analytics for real-time data processing",
+      "use_when": [
+        {"field": "latency_requirements", "op": "in", "value": ["real_time", "near_real_time"]},
+        {"field": "processing_type", "op": "in", "value": ["streaming"]},
+        {"field": "data_velocity", "op": "in", "value": ["high", "very_high"]}
+      ],
+      "avoid_when": [
+        {"field": "processing_type", "op": "in", "value": ["batch"]},
+        {"field": "data_velocity", "op": "in", "value": ["low"]}
+      ],
+      "typical_use_cases": [
+        "IoT data processing",
+        "Real-time fraud detection",
+        "Live dashboard updates",
+        "Event-driven analytics"
+      ]
+    },
+    {
+      "id": "cosmos_db_nosql",
+      "outcome": "prefer_cosmos_db",
+      "score": 0.92,
+      "summary": "Use Azure Cosmos DB for globally distributed NoSQL applications",
+      "use_when": [
+        {"field": "data_variety", "op": "in", "value": ["unstructured", "semi_structured"]},
+        {"field": "latency_requirements", "op": "in", "value": ["real_time", "near_real_time"]},
+        {"field": "consistency_requirements", "op": "in", "value": ["eventual", "flexible"]}
+      ],
+      "avoid_when": [
+        {"field": "consistency_requirements", "op": "in", "value": ["strict_acid"]},
+        {"field": "budget_constraints", "op": "in", "value": ["very_low"]}
+      ],
+      "typical_use_cases": [
+        "Global web applications",
+        "IoT data storage",
+        "Content management systems",
+        "Real-time personalization"
+      ]
+    }
+  ]
+}

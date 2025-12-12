@@ -1,0 +1,122 @@
+{
+  "domain": "integration_platform",
+  "signals_fields": [
+    "integration_pattern",
+    "message_volume",
+    "protocol_requirements",
+    "security_requirements",
+    "transformation_complexity",
+    "endpoint_count",
+    "reliability_requirements",
+    "monitoring_needs",
+    "deployment_model",
+    "legacy_system_support"
+  ],
+  "patterns": [
+    {
+      "id": "azure_service_bus",
+      "outcome": "prefer_service_bus",
+      "score": 0.9,
+      "summary": "Use Azure Service Bus for enterprise messaging",
+      "use_when": [
+        {"field": "integration_pattern", "op": "in", "value": ["message_queue", "publish_subscribe"]},
+        {"field": "reliability_requirements", "op": "in", "value": ["high", "mission_critical"]},
+        {"field": "message_volume", "op": "in", "value": ["medium", "high"]}
+      ],
+      "avoid_when": [
+        {"field": "protocol_requirements", "op": "intersects", "value": ["custom_protocols"]},
+        {"field": "message_volume", "op": "in", "value": ["very_low"]}
+      ],
+      "typical_use_cases": [
+        "Decoupling microservices",
+        "Order processing systems",
+        "Event-driven architectures",
+        "Reliable message delivery"
+      ]
+    },
+    {
+      "id": "azure_event_hubs",
+      "outcome": "prefer_event_hubs",
+      "score": 0.88,
+      "summary": "Use Azure Event Hubs for high-throughput event streaming",
+      "use_when": [
+        {"field": "message_volume", "op": "in", "value": ["very_high"]},
+        {"field": "integration_pattern", "op": "in", "value": ["event_streaming"]},
+        {"field": "protocol_requirements", "op": "intersects", "value": ["kafka", "amqp"]}
+      ],
+      "avoid_when": [
+        {"field": "transformation_complexity", "op": "in", "value": ["high"]},
+        {"field": "message_volume", "op": "in", "value": ["low", "very_low"]}
+      ],
+      "typical_use_cases": [
+        "IoT telemetry ingestion",
+        "Real-time analytics pipelines",
+        "High-volume log processing",
+        "Event sourcing architectures"
+      ]
+    },
+    {
+      "id": "azure_api_management",
+      "outcome": "prefer_api_management",
+      "score": 0.85,
+      "summary": "Use Azure API Management for API gateway and management",
+      "use_when": [
+        {"field": "integration_pattern", "op": "in", "value": ["api_gateway", "rest_api"]},
+        {"field": "security_requirements", "op": "intersects", "value": ["authentication", "authorization", "rate_limiting"]},
+        {"field": "endpoint_count", "op": "in", "value": ["medium", "high"]}
+      ],
+      "avoid_when": [
+        {"field": "deployment_model", "op": "in", "value": ["on_premises_only"]},
+        {"field": "endpoint_count", "op": "in", "value": ["very_low"]}
+      ],
+      "typical_use_cases": [
+        "API monetization",
+        "Legacy system modernization",
+        "Partner API exposure",
+        "Microservices API management"
+      ]
+    },
+    {
+      "id": "azure_logic_apps_integration",
+      "outcome": "prefer_logic_apps",
+      "score": 0.87,
+      "summary": "Use Azure Logic Apps for workflow-based integration",
+      "use_when": [
+        {"field": "integration_pattern", "op": "in", "value": ["workflow", "orchestration"]},
+        {"field": "transformation_complexity", "op": "in", "value": ["medium", "high"]},
+        {"field": "legacy_system_support", "op": "in", "value": ["required"]}
+      ],
+      "avoid_when": [
+        {"field": "message_volume", "op": "in", "value": ["very_high"]},
+        {"field": "reliability_requirements", "op": "in", "value": ["mission_critical"]}
+      ],
+      "typical_use_cases": [
+        "B2B integration scenarios",
+        "Multi-step business processes",
+        "Legacy system integration",
+        "Document processing workflows"
+      ]
+    },
+    {
+      "id": "azure_functions_integration",
+      "outcome": "prefer_azure_functions",
+      "score": 0.83,
+      "summary": "Use Azure Functions for lightweight, event-driven integration",
+      "use_when": [
+        {"field": "integration_pattern", "op": "in", "value": ["event_driven", "serverless"]},
+        {"field": "transformation_complexity", "op": "in", "value": ["low", "medium"]},
+        {"field": "deployment_model", "op": "in", "value": ["cloud_native"]}
+      ],
+      "avoid_when": [
+        {"field": "reliability_requirements", "op": "in", "value": ["mission_critical"]},
+        {"field": "transformation_complexity", "op": "in", "value": ["high"]}
+      ],
+      "typical_use_cases": [
+        "Event processing triggers",
+        "Simple data transformations",
+        "Webhook handlers",
+        "Scheduled integration tasks"
+      ]
+    }
+  ]
+}
