@@ -1,6 +1,7 @@
 defmodule DecisionEngineWeb.DomainManagementLive do
   use DecisionEngineWeb, :live_view
   alias DecisionEngine.DomainManager
+  alias DecisionEngine.DescriptionGenerator
   require Logger
 
   @impl true
@@ -17,6 +18,8 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       |> assign(:show_delete_modal, false)
       |> assign(:domain_to_delete, nil)
       |> assign(:expanded_domain, nil)
+      |> assign(:generating_description, nil)
+      |> assign(:description_error, nil)
 
     {:ok, socket}
   end
@@ -251,6 +254,36 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     {:noreply, assign(socket, :errors, [])}
   end
 
+  @impl true
+  def handle_event("generate_description", %{"domain" => domain_name}, socket) do
+    domain_atom = String.to_atom(domain_name)
+
+    # Set generating state
+    socket =
+      socket
+      |> assign(:generating_description, domain_atom)
+      |> assign(:description_error, nil)
+
+    # Start async description generation
+    pid = self()
+    Task.start(fn ->
+      case DescriptionGenerator.generate_description(domain_atom) do
+        {:ok, description} ->
+          send(pid, {:description_generated, domain_atom, description})
+        {:error, reason} ->
+          send(pid, {:description_generation_failed, domain_atom, reason})
+      end
+    end)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("clear_description_error", _params, socket) do
+    socket = assign(socket, :description_error, nil)
+    {:noreply, socket}
+  end
+
   defp default_pattern do
     %{
       "id" => "",
@@ -282,12 +315,53 @@ defmodule DecisionEngineWeb.DomainManagementLive do
 
   defp parse_patterns(_), do: []
 
+  @impl true
+  def handle_info({:description_generated, domain_atom, _description}, socket) do
+    Logger.info("Description generated for domain: #{domain_atom}")
+
+    # Reload domains to get updated configuration
+    {:ok, domains} = DomainManager.list_domains()
+
+    socket =
+      socket
+      |> assign(:domains, domains)
+      |> assign(:generating_description, nil)
+      |> put_flash(:info, "Description generated successfully for #{format_domain_name(Atom.to_string(domain_atom))}")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:description_generation_failed, domain_atom, reason}, socket) do
+    Logger.error("Description generation failed for domain #{domain_atom}: #{inspect(reason)}")
+
+    error_message = case reason do
+      :no_api_key_configured -> "LLM API key not configured. Please set OPENAI_API_KEY environment variable."
+      {:llm_call_failed, _} -> "Failed to connect to LLM service. Please check your internet connection and API configuration."
+      _ -> "Failed to generate description. Please try again or enter a description manually."
+    end
+
+    socket =
+      socket
+      |> assign(:generating_description, nil)
+      |> assign(:description_error, {domain_atom, error_message})
+
+    {:noreply, socket}
+  end
+
   defp format_domain_name(domain_name) when is_binary(domain_name) do
     domain_name
     |> String.replace("_", " ")
     |> String.split(" ")
     |> Enum.map(&String.capitalize/1)
     |> Enum.join(" ")
+  end
+
+  defp get_domain_description(domain_atom) do
+    case DescriptionGenerator.get_cached_description(domain_atom) do
+      {:ok, description} -> description
+      {:error, :not_found} -> "No description available"
+    end
   end
 
 
@@ -297,47 +371,102 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     ~H"""
     <div class="min-h-screen bg-base-200">
       <!-- Navbar -->
-      <div class="navbar bg-primary text-primary-content shadow-lg">
+      <nav class="navbar bg-primary text-primary-content shadow-lg" role="navigation" aria-label="Main navigation">
         <div class="flex-1">
-          <a href="/" class="btn btn-ghost text-xl">
-            <span class="hero-sparkles w-6 h-6 mr-2"></span>
-            Decision Engine
-          </a>
+          <.logo_with_text
+            class="btn btn-ghost text-xl"
+            size="h-6 w-auto"
+            text="Decision Engine"
+            href="/"
+            aria_label="Decision Engine home"
+          />
         </div>
-        <div class="flex-none gap-2">
-          <.nav_link navigate="/" class="btn btn-ghost btn-sm">
-            <span class="hero-home w-5 h-5"></span>
+        <div class="flex-none gap-2" role="menubar">
+          <.nav_link
+            navigate="/"
+            class="btn btn-ghost btn-sm"
+            aria_label="Go to home page"
+            role="menuitem"
+          >
+            <span class="hero-home w-5 h-5" aria-hidden="true"></span>
             Home
           </.nav_link>
-          <.nav_link navigate="/history" class="btn btn-ghost btn-sm">
-            <span class="hero-clock w-5 h-5"></span>
+          <.nav_link
+            navigate="/domains"
+            class="btn btn-ghost btn-sm"
+            aria_current="page"
+            aria_label="Current page: Domain management"
+            role="menuitem"
+          >
+            <span class="hero-building-office w-5 h-5" aria-hidden="true"></span>
+            Domains
+          </.nav_link>
+          <.nav_link
+            navigate="/history"
+            class="btn btn-ghost btn-sm"
+            aria_label="Go to decision history"
+            role="menuitem"
+          >
+            <span class="hero-clock w-5 h-5" aria-hidden="true"></span>
             History
           </.nav_link>
-          <.nav_link navigate="/settings" class="btn btn-ghost btn-sm">
-            <span class="hero-cog-6-tooth w-5 h-5"></span>
+          <.nav_link
+            navigate="/settings"
+            class="btn btn-ghost btn-sm"
+            aria_label="Go to settings"
+            role="menuitem"
+          >
+            <span class="hero-cog-6-tooth w-5 h-5" aria-hidden="true"></span>
             Settings
           </.nav_link>
         </div>
-      </div>
+      </nav>
 
       <div class="container mx-auto p-6 max-w-7xl">
         <%= if @form_mode == :list do %>
           <!-- Domain List View -->
           <div class="space-y-6">
             <!-- Header -->
-            <div class="flex justify-between items-center">
+            <header class="flex justify-between items-center">
               <div>
-                <h1 class="text-3xl font-bold">Domain Management</h1>
-                <p class="text-base-content/60 mt-2">Manage decision domains and their configurations</p>
+                <h1 class="text-3xl font-bold" id="page-title">Domain Management</h1>
+                <p class="text-base-content/60 mt-2" aria-describedby="page-title">
+                  Manage decision domains and their configurations
+                  <%= if length(@domains) > 0 do %>
+                    (<%= length(@domains) %> <%= if length(@domains) == 1, do: "domain", else: "domains" %>)
+                  <% end %>
+                </p>
               </div>
               <button
                 phx-click="new_domain"
                 class="btn btn-primary"
+                aria-label="Create a new domain"
               >
-                <span class="hero-plus w-5 h-5"></span>
+                <span class="hero-plus w-5 h-5" aria-hidden="true"></span>
                 New Domain
               </button>
-            </div>
+            </header>
+
+            <!-- Description Generation Error -->
+            <%= if @description_error do %>
+              <% {failed_domain, error_message} = @description_error %>
+              <div class="alert alert-error shadow-lg animate-fade-in">
+                <span class="hero-exclamation-triangle w-6 h-6 flex-shrink-0"></span>
+                <div class="flex-1">
+                  <h3 class="font-bold">Description Generation Failed</h3>
+                  <p class="text-sm">
+                    Failed to generate description for <%= format_domain_name(Atom.to_string(failed_domain)) %>: <%= error_message %>
+                  </p>
+                </div>
+                <button
+                  phx-click="clear_description_error"
+                  class="btn btn-ghost btn-sm btn-square"
+                  title="Dismiss error"
+                >
+                  <span class="hero-x-mark w-4 h-4"></span>
+                </button>
+              </div>
+            <% end %>
 
             <!-- Enhanced Domains Grid with Decision Tables -->
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -351,9 +480,65 @@ defmodule DecisionEngineWeb.DomainManagementLive do
                           <span class="hero-building-office w-7 h-7 text-primary"></span>
                           <%= domain.display_name %>
                         </h2>
-                        <p class="text-sm text-base-content/70 leading-relaxed">
-                          <%= domain.description %>
-                        </p>
+                        <div class="space-y-2">
+                          <p class="text-sm text-base-content/70 leading-relaxed">
+                            <%= if domain.description && String.trim(domain.description) != "" do %>
+                              <%= domain.description %>
+                            <% else %>
+                              <span class="italic text-base-content/50">No description available</span>
+                            <% end %>
+                          </p>
+
+                          <!-- AI Generated Description -->
+                          <%= case get_domain_description(String.to_atom(domain.name)) do %>
+                            <% "No description available" -> %>
+                              <div class="flex items-center gap-2 mt-2">
+                                <%= if @generating_description == String.to_atom(domain.name) do %>
+                                  <div class="flex items-center gap-2 text-info">
+                                    <span class="loading loading-spinner loading-xs"></span>
+                                    <span class="text-xs">Generating AI description...</span>
+                                  </div>
+                                <% else %>
+                                  <button
+                                    phx-click="generate_description"
+                                    phx-value-domain={domain.name}
+                                    class="btn btn-xs btn-info btn-outline gap-1"
+                                  >
+                                    <span class="hero-sparkles w-3 h-3"></span>
+                                    Generate Description
+                                  </button>
+                                <% end %>
+                              </div>
+                            <% ai_description -> %>
+                              <div class="bg-info/10 border border-info/20 rounded-lg p-3 mt-2">
+                                <div class="flex items-start justify-between gap-2">
+                                  <div class="flex-1">
+                                    <div class="flex items-center gap-2 mb-1">
+                                      <span class="hero-sparkles w-4 h-4 text-info"></span>
+                                      <span class="text-xs font-semibold text-info">AI Generated</span>
+                                    </div>
+                                    <p class="text-xs text-base-content/80 leading-relaxed">
+                                      <%= ai_description %>
+                                    </p>
+                                  </div>
+                                  <%= if @generating_description == String.to_atom(domain.name) do %>
+                                    <div class="flex items-center gap-1 text-info">
+                                      <span class="loading loading-spinner loading-xs"></span>
+                                    </div>
+                                  <% else %>
+                                    <button
+                                      phx-click="generate_description"
+                                      phx-value-domain={domain.name}
+                                      class="btn btn-xs btn-ghost btn-square"
+                                      title="Regenerate description"
+                                    >
+                                      <span class="hero-arrow-path w-3 h-3"></span>
+                                    </button>
+                                  <% end %>
+                                </div>
+                              </div>
+                          <% end %>
+                        </div>
                       </div>
                       <div class="dropdown dropdown-end">
                         <div tabindex="0" role="button" class="btn btn-ghost btn-sm">
@@ -369,6 +554,23 @@ defmodule DecisionEngineWeb.DomainManagementLive do
                               <span class="hero-pencil w-4 h-4"></span>
                               Edit Domain
                             </button>
+                          </li>
+                          <li>
+                            <%= if @generating_description == String.to_atom(domain.name) do %>
+                              <div class="flex items-center gap-2 text-info px-3 py-2">
+                                <span class="loading loading-spinner loading-xs"></span>
+                                <span class="text-sm">Generating...</span>
+                              </div>
+                            <% else %>
+                              <button
+                                phx-click="generate_description"
+                                phx-value-domain={domain.name}
+                                class="flex items-center gap-2 text-info"
+                              >
+                                <span class="hero-sparkles w-4 h-4"></span>
+                                Generate Description
+                              </button>
+                            <% end %>
                           </li>
                           <li>
                             <button

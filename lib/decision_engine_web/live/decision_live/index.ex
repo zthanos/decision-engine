@@ -1,6 +1,7 @@
 # lib/decision_engine_web/live/decision_live/index.ex
 defmodule DecisionEngineWeb.DecisionLive.Index do
   use DecisionEngineWeb, :live_view
+  alias DecisionEngine.DescriptionGenerator
   require Logger
 
   @impl true
@@ -11,6 +12,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
 
     # Subscribe to domain changes for real-time updates
     Phoenix.PubSub.subscribe(DecisionEngine.PubSub, "domain_changes")
+
+    # Load history using HistoryManager
+    history = case DecisionEngine.HistoryManager.load_history() do
+      {:ok, entries} -> Enum.take(entries, 10)  # Show last 10 entries
+      {:error, _} -> []
+    end
 
     {:ok,
      socket
@@ -26,7 +33,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
      |> assign(:streaming_enabled, false)
      |> assign(:streaming_session_id, nil)
      |> assign(:streaming_result, nil)
-     |> assign(:history, load_history())}
+     |> assign(:history, history)}
   end
 
   @impl true
@@ -42,7 +49,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
       "anthropic" -> "claude-sonnet-4-20250514"
       "ollama" -> "ministral-3:3b"
       "openrouter" -> "anthropic/claude-3.5-sonnet"
-      "lm_studio" -> "local-model"
+      "lm_studio" -> "ministral-3-14b-reasoning-2512"
       _ -> ""
     end
 
@@ -168,8 +175,14 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
           rendered_html: final_html
         })
 
-        # Save to history
+        # Save to history using HistoryManager
         save_to_history(updated_result)
+
+        # Reload history
+        history = case DecisionEngine.HistoryManager.load_history() do
+          {:ok, entries} -> Enum.take(entries, 10)
+          {:error, _} -> socket.assigns.history
+        end
 
         {:noreply,
          socket
@@ -177,7 +190,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
          |> assign(:result, updated_result)
          |> assign(:streaming_result, nil)
          |> assign(:streaming_session_id, nil)
-         |> assign(:history, load_history())}
+         |> assign(:history, history)}
       else
         {:noreply, assign(socket, :processing, false)}
       end
@@ -204,14 +217,20 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
 
   @impl true
   def handle_info({:process_complete, {:ok, result}}, socket) do
-    # Save to history
+    # Save to history using HistoryManager
     save_to_history(result)
+
+    # Reload history
+    history = case DecisionEngine.HistoryManager.load_history() do
+      {:ok, entries} -> Enum.take(entries, 10)
+      {:error, _} -> socket.assigns.history
+    end
 
     {:noreply,
      socket
      |> assign(:processing, false)
      |> assign(:result, result)
-     |> assign(:history, load_history())}
+     |> assign(:history, history)}
   end
 
   @impl true
@@ -320,31 +339,9 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     end
   end
 
-  defp load_history do
-    # In production, use a database
-    # For now, we'll use process dictionary or ETS
-    case :ets.whereis(:decision_history) do
-      :undefined ->
-        :ets.new(:decision_history, [:named_table, :public, :ordered_set])
-        []
-
-      _table ->
-        :ets.tab2list(:decision_history)
-        |> Enum.sort_by(fn {timestamp, _} -> timestamp end, :desc)
-        |> Enum.take(10)
-        |> Enum.map(fn {_, result} -> result end)
-    end
-  end
-
   defp save_to_history(result) do
-    case :ets.whereis(:decision_history) do
-      :undefined ->
-        :ets.new(:decision_history, [:named_table, :public, :ordered_set])
-      _ -> :ok
-    end
-
-    timestamp = :os.system_time(:millisecond)
-    :ets.insert(:decision_history, {timestamp, result})
+    # Use HistoryManager to save analysis
+    DecisionEngine.HistoryManager.save_analysis(result)
   end
 
   @impl true
@@ -352,69 +349,97 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     ~H"""
     <div class="min-h-screen bg-base-200">
       <!-- Navbar -->
-      <div class="navbar bg-primary text-primary-content shadow-lg">
+      <nav class="navbar bg-primary text-primary-content shadow-lg" role="navigation" aria-label="Main navigation">
         <div class="flex-1">
-          <a href="/" class="btn btn-ghost text-xl">
-            <span class="hero-sparkles w-6 h-6 mr-2"></span>
-            Decision Engine
-          </a>
+          <.logo_with_text
+            class="btn btn-ghost text-xl"
+            size="h-6 w-auto"
+            text="Decision Engine"
+            href="/"
+            aria_label="Decision Engine home"
+          />
         </div>
-        <div class="flex-none gap-2">
-          <.nav_link navigate="/domains" class="btn btn-ghost btn-sm">
-            <span class="hero-building-office w-5 h-5"></span>
+        <div class="flex-none gap-2" role="menubar">
+          <.nav_link
+            navigate="/domains"
+            class="btn btn-ghost btn-sm"
+            aria_label="Go to domain management"
+            role="menuitem"
+          >
+            <span class="hero-building-office w-5 h-5" aria-hidden="true"></span>
             Domains
           </.nav_link>
-          <.nav_link navigate="/history" class="btn btn-ghost btn-sm">
-            <span class="hero-clock w-5 h-5"></span>
+          <.nav_link
+            navigate="/history"
+            class="btn btn-ghost btn-sm"
+            aria_label="Go to decision history"
+            role="menuitem"
+          >
+            <span class="hero-clock w-5 h-5" aria-hidden="true"></span>
             History
           </.nav_link>
-          <.nav_link navigate="/settings" class="btn btn-ghost btn-sm">
-            <span class="hero-cog-6-tooth w-5 h-5"></span>
+          <.nav_link
+            navigate="/settings"
+            class="btn btn-ghost btn-sm"
+            aria_label="Go to settings"
+            role="menuitem"
+          >
+            <span class="hero-cog-6-tooth w-5 h-5" aria-hidden="true"></span>
             Settings
           </.nav_link>
         </div>
-      </div>
+      </nav>
 
       <div class="container mx-auto p-6 max-w-7xl">
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <!-- Left Panel - Input -->
           <div class="lg:col-span-2 space-y-6">
             <!-- Input Card -->
-            <div class="card bg-base-100 shadow-xl">
+            <section class="card bg-base-100 shadow-xl" aria-labelledby="input-section-title">
               <div class="card-body">
-                <h2 class="card-title text-2xl mb-4">
-                  <span class="hero-document-text w-7 h-7"></span>
+                <h2 class="card-title text-2xl mb-4" id="input-section-title">
+                  <span class="hero-document-text w-7 h-7" aria-hidden="true"></span>
                   Describe Your Automation Scenario
                 </h2>
 
                 <form id="scenario-form" phx-submit="process" phx-change="validate" phx-hook="StreamingController">
                   <div class="form-control">
+                    <label for="scenario-input" class="label">
+                      <span class="label-text font-semibold">Scenario Description</span>
+                    </label>
                     <textarea
+                      id="scenario-input"
                       name="decision[scenario]"
                       class="textarea textarea-bordered h-48 text-base"
                       placeholder="Example: We need to automate an approval process when a document is uploaded in SharePoint, notify the manager in Teams, and update a record in Dataverse..."
                       phx-debounce="300"
+                      aria-describedby="scenario-help"
+                      aria-required="true"
                     ><%= @scenario %></textarea>
                     <label class="label">
-                      <span class="label-text-alt">Describe your integration or automation needs in natural language</span>
+                      <span class="label-text-alt" id="scenario-help">
+                        Describe your integration or automation needs in natural language.
+                        Be specific about systems, processes, and requirements.
+                      </span>
                     </label>
                   </div>
 
-                  <div class="card-actions justify-between items-center mt-4">
+                  <div class="card-actions justify-between items-center mt-4" role="group" aria-label="Form actions">
                     <div class="flex items-center gap-4">
                       <button
                         type="button"
                         phx-click="clear"
                         class="btn btn-ghost btn-sm"
                         disabled={@processing}
+                        aria-label="Clear scenario text"
                       >
-                        <span class="hero-x-mark w-5 h-5"></span>
+                        <span class="hero-x-mark w-5 h-5" aria-hidden="true"></span>
                         Clear
                       </button>
 
                       <!-- Streaming Toggle -->
                       <div class="form-control">
-                        <label class="label cursor-pointer gap-2">
+                        <label class="label cursor-pointer gap-2" for="streaming-toggle">
                           <span class="label-text text-sm">Stream response</span>
                           <input
                             id="streaming-toggle"
@@ -422,8 +447,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                             class="toggle toggle-primary toggle-sm"
                             phx-hook="StreamingToggle"
                             checked={@streaming_enabled}
+                            aria-describedby="streaming-help"
                           />
                         </label>
+                        <div id="streaming-help" class="sr-only">
+                          Enable to see the AI response as it's being generated in real-time
+                        </div>
                       </div>
                     </div>
 
@@ -431,37 +460,50 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                       type="submit"
                       class="btn btn-primary"
                       disabled={@processing or String.trim(@scenario) == ""}
+                      aria-describedby="submit-help"
                     >
                       <%= if @processing do %>
-                        <span class="loading loading-spinner"></span>
+                        <span class="loading loading-spinner" aria-hidden="true"></span>
                         <%= if @streaming_enabled do %>
                           Streaming...
                         <% else %>
                           Processing...
                         <% end %>
                       <% else %>
-                        <span class="hero-cpu-chip w-5 h-5"></span>
+                        <span class="hero-cpu-chip w-5 h-5" aria-hidden="true"></span>
                         Analyze Scenario
                       <% end %>
                     </button>
+                    <div id="submit-help" class="sr-only">
+                      <%= if String.trim(@scenario) == "" do %>
+                        Please enter a scenario description to analyze
+                      <% else %>
+                        Click to analyze your scenario and get recommendations
+                      <% end %>
+                    </div>
                   </div>
                 </form>
 
                 <!-- Example Scenarios -->
-                <div class="divider">Quick Examples</div>
-                <div class="flex flex-wrap gap-2">
-                  <%= for example <- get_domain_examples(@domain) do %>
-                    <button
-                      phx-click="use_example"
-                      phx-value-scenario={example.scenario}
-                      class="btn btn-sm btn-outline"
-                    >
-                      <%= example.title %>
-                    </button>
-                  <% end %>
+                <div class="divider" aria-hidden="true">Quick Examples</div>
+                <div class="space-y-2">
+                  <h3 class="text-sm font-semibold text-base-content/70">Try these example scenarios:</h3>
+                  <div class="flex flex-wrap gap-2" role="group" aria-label="Example scenarios">
+                    <%= for example <- get_domain_examples(@domain) do %>
+                      <button
+                        phx-click="use_example"
+                        phx-value-scenario={example.scenario}
+                        class="btn btn-sm btn-outline"
+                        aria-label={"Use example: #{example.title}"}
+                        title={example.scenario}
+                      >
+                        <%= example.title %>
+                      </button>
+                    <% end %>
+                  </div>
                 </div>
               </div>
-            </div>
+            </section>
 
             <!-- Results Card -->
             <%= if @result || @streaming_result do %>
@@ -616,21 +658,45 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                     <select
                       class="select select-bordered"
                       name="domain"
+                      title={get_domain_description(@domain)}
                     >
                       <%= for domain <- @available_domains do %>
-                        <option value={domain} selected={@domain == domain}>
-                          <%= format_domain_name(domain) %>
+                        <% description = get_domain_description(domain) %>
+                        <% truncated_description = truncate_description(description) %>
+                        <option
+                          value={domain}
+                          selected={@domain == domain}
+                          title={description}
+                        >
+                          <%= format_domain_name(domain) %> - <%= truncated_description %>
                         </option>
                       <% end %>
                     </select>
+                    <label class="label">
+                      <span class="label-text-alt">Hover over options to see full descriptions</span>
+                    </label>
                   </div>
                 </form>
 
-                <div class="alert alert-info mt-4">
-                  <span class="hero-information-circle w-5 h-5"></span>
-                  <span class="text-xs">
-                    <%= get_domain_description(@domain) %>
-                  </span>
+                <!-- Enhanced description display with context -->
+                <div class="mt-4">
+                  <div class="flex items-start gap-2">
+                    <span class="hero-information-circle w-5 h-5 text-info flex-shrink-0 mt-0.5"></span>
+                    <div class="flex-1">
+                      <h3 class="font-medium text-sm mb-1">
+                        <%= format_domain_name(@domain) %> Domain
+                      </h3>
+                      <p class="text-xs text-base-content/70 leading-relaxed">
+                        <%= get_domain_description(@domain) %>
+                      </p>
+                      <%= if is_description_missing?(@domain) do %>
+                        <div class="mt-2 text-xs text-warning">
+                          <span class="hero-exclamation-triangle w-4 h-4 inline"></span>
+                          No custom description available - using default description
+                        </div>
+                      <% end %>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -736,8 +802,8 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                 <div class="stat">
                   <div class="stat-title">Last Decision</div>
                   <div class="stat-value text-sm">
-                    <%= if hd(@history) do %>
-                      <%= format_time(hd(@history).timestamp) %>
+                    <%= if length(@history) > 0 do %>
+                      <%= format_time(List.first(@history).timestamp) %>
                     <% end %>
                   </div>
                 </div>
@@ -781,16 +847,23 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
   end
 
   defp get_domain_description(domain) do
-    case DecisionEngine.DomainManager.get_domain(domain) do
-      {:ok, domain_config} ->
-        domain_config.description
-      {:error, _} ->
-        # Fallback to hardcoded descriptions for core domains
-        case domain do
-          :power_platform -> "Optimized for Power Automate, Power Apps, and business user scenarios"
-          :data_platform -> "Optimized for data processing, ETL, and analytics workloads"
-          :integration_platform -> "Optimized for system integration and API connectivity scenarios"
-          _ -> "Custom domain for specialized decision scenarios"
+    # First try to get AI-generated description
+    case DescriptionGenerator.get_cached_description(domain) do
+      {:ok, ai_description} ->
+        ai_description
+      {:error, :not_found} ->
+        # Fallback to manual description from domain config
+        case DecisionEngine.DomainManager.get_domain(domain) do
+          {:ok, domain_config} when domain_config.description != nil and domain_config.description != "" ->
+            domain_config.description
+          _ ->
+            # Final fallback to hardcoded descriptions for core domains
+            case domain do
+              :power_platform -> "Optimized for Power Automate, Power Apps, and business user scenarios"
+              :data_platform -> "Optimized for data processing, ETL, and analytics workloads"
+              :integration_platform -> "Optimized for system integration and API connectivity scenarios"
+              _ -> "Custom domain for specialized decision scenarios"
+            end
         end
     end
   end
@@ -815,6 +888,33 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
       _ -> [
         %{title: "Custom Scenario", scenario: "Describe your specific use case for the #{format_domain_name(domain)} domain."}
       ]
+    end
+  end
+
+  defp truncate_description(description, max_length \\ 50) do
+    if String.length(description) <= max_length do
+      description
+    else
+      description
+      |> String.slice(0, max_length - 3)
+      |> String.trim()
+      |> Kernel.<>("...")
+    end
+  end
+
+  defp is_description_missing?(domain) do
+    # Check if we're using a fallback description (AI-generated or manual description not available)
+    case DescriptionGenerator.get_cached_description(domain) do
+      {:ok, _ai_description} ->
+        false  # AI description available
+      {:error, :not_found} ->
+        # Check if manual description exists
+        case DecisionEngine.DomainManager.get_domain(domain) do
+          {:ok, domain_config} when domain_config.description != nil and domain_config.description != "" ->
+            false  # Manual description available
+          _ ->
+            true  # Using fallback description
+        end
     end
   end
 

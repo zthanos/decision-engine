@@ -31,7 +31,7 @@ defmodule DecisionEngine.LLMClient do
         case parse_and_validate_signals(response, user_scenario, config, domain, schema_module, retry_count) do
           {:retry_needed, scenario, config, domain, schema_module, new_retry_count} ->
             extract_signals(scenario, config, domain, schema_module, rule_config, new_retry_count)
-          
+
           result ->
             result
         end
@@ -49,7 +49,7 @@ defmodule DecisionEngine.LLMClient do
     case DecisionEngine.RuleConfig.load(:power_platform) do
       {:ok, rule_config} ->
         extract_signals(user_scenario, config, :power_platform, schema_module, rule_config, retry_count)
-      
+
       {:error, reason} ->
         Logger.error("Failed to load power_platform config for backward compatibility: #{inspect(reason)}")
         {:error, "Failed to load configuration: #{inspect(reason)}"}
@@ -74,22 +74,43 @@ defmodule DecisionEngine.LLMClient do
   end
 
   @doc """
+  Generates text using LLM for general purposes like description generation.
+
+  ## Parameters
+  - prompt: String prompt to send to LLM
+  - config: LLM configuration map
+
+  ## Returns
+  - {:ok, String.t()} with generated text
+  - {:error, term()} on failure
+  """
+  @spec generate_text(String.t(), map()) :: {:ok, String.t()} | {:error, term()}
+  def generate_text(prompt, config) do
+    case call_llm(prompt, config) do
+      {:ok, response} ->
+        {:ok, response}
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Streams LLM justification generation to a StreamManager process.
-  
+
   This function initiates streaming LLM response generation and sends content
   chunks to the specified stream_pid as they become available from the LLM provider.
-  
+
   ## Parameters
   - signals: Extracted signals from scenario processing
   - decision_result: Result from rule engine evaluation
   - config: LLM client configuration (must include streaming support)
   - domain: The domain being processed
   - stream_pid: Process ID of the StreamManager to receive chunks
-  
+
   ## Returns
   - :ok if streaming started successfully
   - {:error, reason} if streaming failed to start
-  
+
   ## Streaming Protocol
   The stream_pid will receive messages in the following format:
   - {:chunk, content} - Partial content chunk from LLM
@@ -99,17 +120,17 @@ defmodule DecisionEngine.LLMClient do
   @spec stream_justification(map(), map(), map(), atom(), pid()) :: :ok | {:error, term()}
   def stream_justification(signals, decision_result, config, domain, stream_pid) do
     prompt = build_justification_prompt(signals, decision_result, domain)
-    
+
     # Configure LLM for streaming mode
     streaming_config = Map.put(config, :stream, true)
-    
+
     Logger.info("Starting LLM streaming for domain #{domain}")
-    
+
     case call_llm_stream(prompt, streaming_config, stream_pid) do
-      :ok -> 
+      :ok ->
         Logger.debug("LLM streaming initiated successfully for domain #{domain}")
         :ok
-      {:error, reason} -> 
+      {:error, reason} ->
         Logger.error("Failed to start LLM streaming for domain #{domain}: #{inspect(reason)}")
         {:error, reason}
     end
@@ -146,31 +167,31 @@ defmodule DecisionEngine.LLMClient do
 
   defp build_justification_prompt(signals, decision_result, domain) do
     domain_name = domain |> Atom.to_string() |> String.replace("_", " ") |> String.capitalize()
-    
+
     # Handle different decision result structures
     {pattern_id, recommendation, score} = case decision_result do
       %{pattern_id: pid, summary: summary, score: s} ->
         {pid, summary, s}
-      
+
       %{"pattern_id" => pid, "summary" => summary, "score" => s} ->
         {pid, summary, s}
-      
+
       %{recommendation: rec} ->
         {"unknown", rec, "N/A"}
-      
+
       %{"recommendation" => rec} ->
         {"unknown", rec, "N/A"}
-      
+
       _ ->
         {"unknown", "No specific recommendation", "N/A"}
     end
-    
+
     """
-    Based on the following architecture signals and decision outcome for the #{domain_name} domain, 
+    Based on the following architecture signals and decision outcome for the #{domain_name} domain,
     provide a clear justification explaining why this is the proper solution for the scenario.
 
     Domain: #{domain_name}
-    
+
     Signals:
     #{Jason.encode!(signals, pretty: true)}
 
@@ -192,7 +213,7 @@ defmodule DecisionEngine.LLMClient do
   defp build_domain_context(domain, rule_config) do
     domain_name = domain |> Atom.to_string() |> String.replace("_", " ") |> String.capitalize()
     domain_from_config = rule_config["domain"] || "unknown"
-    
+
     """
     DOMAIN CONTEXT: #{domain_name}
     You are extracting signals for architectural decisions in the #{domain_name} domain.
@@ -204,8 +225,8 @@ defmodule DecisionEngine.LLMClient do
   defp build_field_descriptions(schema_module) do
     schema = schema_module.schema()
     properties = schema["properties"] || %{}
-    
-    field_descriptions = 
+
+    field_descriptions =
       properties
       |> Enum.map(fn {field, definition} ->
         description = definition["description"] || "No description available"
@@ -217,7 +238,7 @@ defmodule DecisionEngine.LLMClient do
         "- #{field}: #{description}#{enum_values}"
       end)
       |> Enum.join("\n")
-    
+
     """
     Extract the following fields based on the domain-specific schema:
     #{field_descriptions}
@@ -226,17 +247,17 @@ defmodule DecisionEngine.LLMClient do
 
   defp build_pattern_summaries(rule_config) do
     patterns = rule_config["patterns"] || []
-    
+
     if Enum.empty?(patterns) do
       ""
     else
-      pattern_summaries = 
+      pattern_summaries =
         patterns
         |> Enum.map(fn pattern ->
           "- #{pattern["summary"]} (#{pattern["id"]})"
         end)
         |> Enum.join("\n")
-      
+
       """
       AVAILABLE PATTERNS IN THIS DOMAIN:
       The following patterns are available for recommendations. Extract signals that align with these patterns:
@@ -247,7 +268,7 @@ defmodule DecisionEngine.LLMClient do
 
   defp build_retry_guidance(domain, retry_count) do
     domain_name = domain |> Atom.to_string() |> String.replace("_", " ") |> String.capitalize()
-    
+
     """
     RETRY GUIDANCE (Attempt #{retry_count + 1}):
     Previous extraction failed validation. Please ensure:
@@ -276,7 +297,7 @@ defmodule DecisionEngine.LLMClient do
   @spec call_llm_stream(String.t(), map(), pid()) :: :ok | {:error, term()}
   defp call_llm_stream(prompt, config, stream_pid) do
     provider = Map.get(config, :provider) || Map.get(config, "provider")
-    
+
     case provider do
       :anthropic ->
         call_anthropic_stream(prompt, config, stream_pid)
@@ -471,20 +492,20 @@ defmodule DecisionEngine.LLMClient do
       try do
         # Use Finch for streaming support
         json_body = Jason.encode!(body)
-        
+
         request = Finch.build(:post, config.api_url, headers, json_body)
-        
+
         case Finch.stream(request, DecisionEngine.Finch, nil, fn
           {:status, status}, acc when status == 200 ->
             {:cont, acc}
-          
+
           {:status, status}, _acc ->
             send(stream_pid, {:error, "HTTP #{status}"})
             {:halt, :error}
-          
+
           {:headers, _headers}, acc ->
             {:cont, acc}
-          
+
           {:data, chunk}, acc ->
             Logger.debug("Received streaming chunk: #{inspect(chunk)}")
             case parse_openai_stream_chunk(chunk) do
@@ -492,16 +513,16 @@ defmodule DecisionEngine.LLMClient do
                 Logger.debug("Sending content chunk: #{inspect(content)}")
                 send(stream_pid, {:chunk, content})
                 {:cont, acc}
-              
+
               :continue ->
                 Logger.debug("Continuing stream parsing")
                 {:cont, acc}
-              
+
               :done ->
                 Logger.debug("Stream completed")
                 send(stream_pid, {:complete})
                 {:halt, :done}
-              
+
               {:error, reason} ->
                 Logger.error("Stream parsing error: #{inspect(reason)}")
                 send(stream_pid, {:error, reason})
@@ -511,7 +532,7 @@ defmodule DecisionEngine.LLMClient do
           {:ok, _acc} ->
             # Stream completed successfully
             :ok
-          
+
           {:error, reason} ->
             send(stream_pid, {:error, reason})
         end
@@ -552,33 +573,33 @@ defmodule DecisionEngine.LLMClient do
     spawn_link(fn ->
       try do
         json_body = Jason.encode!(body)
-        
+
         request = Finch.build(:post, config.api_url, headers, json_body)
-        
+
         case Finch.stream(request, DecisionEngine.Finch, nil, fn
           {:status, status}, acc when status == 200 ->
             {:cont, acc}
-          
+
           {:status, status}, _acc ->
             send(stream_pid, {:error, "HTTP #{status}"})
             {:halt, :error}
-          
+
           {:headers, _headers}, acc ->
             {:cont, acc}
-          
+
           {:data, chunk}, acc ->
             case parse_anthropic_stream_chunk(chunk) do
               {:content, content} ->
                 send(stream_pid, {:chunk, content})
                 {:cont, acc}
-              
+
               :continue ->
                 {:cont, acc}
-              
+
               :done ->
                 send(stream_pid, {:complete})
                 {:halt, :done}
-              
+
               {:error, reason} ->
                 send(stream_pid, {:error, reason})
                 {:halt, :error}
@@ -587,7 +608,7 @@ defmodule DecisionEngine.LLMClient do
           {:ok, _acc} ->
             # Stream completed successfully
             :ok
-          
+
           {:error, reason} ->
             send(stream_pid, {:error, reason})
         end
@@ -607,30 +628,30 @@ defmodule DecisionEngine.LLMClient do
   defp parse_openai_stream_chunk(chunk) do
     # OpenAI streaming format: "data: {json}\n\n"
     lines = String.split(chunk, "\n")
-    
+
     Enum.reduce_while(lines, :continue, fn line, _acc ->
       case String.trim(line) do
         "data: [DONE]" ->
           {:halt, :done}
-        
+
         "data: " <> json_data ->
           case Jason.decode(json_data) do
             {:ok, %{"choices" => [%{"delta" => %{"content" => content}} | _]}} when is_binary(content) ->
               {:halt, {:content, content}}
-            
+
             {:ok, %{"choices" => [%{"finish_reason" => reason} | _]}} when not is_nil(reason) ->
               {:halt, :done}
-            
+
             {:ok, _} ->
               {:cont, :continue}
-            
+
             {:error, reason} ->
               {:halt, {:error, "Failed to parse stream chunk: #{inspect(reason)}"}}
           end
-        
+
         "" ->
           {:cont, :continue}
-        
+
         _ ->
           {:cont, :continue}
       end
@@ -641,27 +662,27 @@ defmodule DecisionEngine.LLMClient do
   defp parse_anthropic_stream_chunk(chunk) do
     # Anthropic streaming format: "data: {json}\n\n"
     lines = String.split(chunk, "\n")
-    
+
     Enum.reduce_while(lines, :continue, fn line, _acc ->
       case String.trim(line) do
         "data: " <> json_data ->
           case Jason.decode(json_data) do
             {:ok, %{"type" => "content_block_delta", "delta" => %{"text" => content}}} ->
               {:halt, {:content, content}}
-            
+
             {:ok, %{"type" => "message_stop"}} ->
               {:halt, :done}
-            
+
             {:ok, _} ->
               {:cont, :continue}
-            
+
             {:error, reason} ->
               {:halt, {:error, "Failed to parse Anthropic stream chunk: #{inspect(reason)}"}}
           end
-        
+
         "" ->
           {:cont, :continue}
-        
+
         _ ->
           {:cont, :continue}
       end
@@ -695,19 +716,19 @@ defmodule DecisionEngine.LLMClient do
         # Simulate streaming chunks with delays
         Process.sleep(50)
         send(stream_pid, {:chunk, "## Recommendation Analysis\n\n"})
-        
+
         Process.sleep(100)
         send(stream_pid, {:chunk, "Based on your scenario, here are the key findings:\n\n"})
-        
+
         Process.sleep(150)
         send(stream_pid, {:chunk, "- **Primary consideration**: Your requirements align well with the platform capabilities\n"})
-        
+
         Process.sleep(100)
         send(stream_pid, {:chunk, "- **Technical fit**: The proposed solution matches your technical constraints\n\n"})
-        
+
         Process.sleep(125)
         send(stream_pid, {:chunk, "### Next Steps\n\n1. Review the recommended approach\n2. Consider implementation timeline\n3. Plan for testing and validation"})
-        
+
         Process.sleep(50)
         send(stream_pid, {:complete})
       rescue
@@ -716,7 +737,7 @@ defmodule DecisionEngine.LLMClient do
           send(stream_pid, {:error, "Simulated streaming failed: #{inspect(error)}"})
       end
     end)
-    
+
     :ok
   end
 end

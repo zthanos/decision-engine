@@ -12,6 +12,11 @@ This feature enhances the existing multi-domain decision engine with user interf
 - **Logo_Component**: Visual branding element displayed in the application interface
 - **History_Manager**: Component responsible for storing, retrieving, and managing analysis history
 - **Description_Generator**: Component that uses LLM to generate domain descriptions from rule JSON
+- **LLM_Configuration**: User-defined settings for Large Language Model integration including provider, model, and connection parameters
+- **Settings_Page**: Dedicated interface for configuring application preferences including LLM settings
+- **Streaming_Response**: Real-time delivery of LLM-generated content as it's being produced rather than waiting for completion
+- **API_Key**: Sensitive authentication credential for accessing LLM services that must not be persistently stored
+- **LLM_Provider**: External service that provides Large Language Model capabilities (e.g., OpenAI, Anthropic, local models)
 
 ## Requirements
 
@@ -134,3 +139,75 @@ This feature enhances the existing multi-domain decision engine with user interf
 3. WHEN descriptions are generated THEN they SHALL accurately reflect the domain's decision-making patterns and intended use cases
 4. WHEN multiple domains exist THEN each generated description SHALL be unique and domain-specific
 5. WHERE domain configurations are complex THEN the system SHALL generate descriptions that explain the key decision factors clearly
+
+### Requirement 11
+
+**User Story:** As a user, I want to configure LLM settings in a dedicated settings page, so that I can customize the AI integration according to my preferences and available services.
+
+#### Acceptance Criteria
+
+1. WHEN I access the application THEN the system SHALL provide a settings page accessible from the main navigation
+2. WHEN I open the settings page THEN the system SHALL display LLM configuration options including provider selection, model selection, and API endpoint configuration
+3. WHEN I configure LLM settings THEN the system SHALL validate the configuration parameters before saving
+4. WHEN I save LLM configuration THEN the system SHALL store all settings except API keys in persistent browser storage
+5. WHERE multiple LLM providers are supported THEN the system SHALL allow selection between different providers with provider-specific configuration options
+
+### Requirement 12
+
+**User Story:** As a user, I want my LLM configuration to persist across sessions, so that I don't need to reconfigure the system every time I visit the application.
+
+#### Acceptance Criteria
+
+1. WHEN I configure LLM settings THEN the system SHALL save the configuration to browser local storage immediately
+2. WHEN I return to the application THEN the system SHALL automatically load my previously saved LLM configuration
+3. WHEN loading saved configuration THEN the system SHALL restore all settings except API keys which must be re-entered
+4. WHEN configuration is missing or invalid THEN the system SHALL prompt me to configure LLM settings before allowing AI features
+5. WHERE configuration becomes outdated THEN the system SHALL handle version compatibility and prompt for updates when necessary
+
+### Requirement 13
+
+**User Story:** As a security-conscious user, I want API keys to not be stored persistently, so that my sensitive credentials remain secure even if my device is compromised.
+
+#### Acceptance Criteria
+
+1. WHEN I enter API keys THEN the system SHALL store them only in memory during the current session
+2. WHEN I close the browser or refresh the page THEN the system SHALL require me to re-enter API keys
+3. WHEN API keys are needed THEN the system SHALL prompt for re-entry with clear indication of why they're required
+4. WHEN API keys are entered THEN the system SHALL mask or hide the key values in the interface
+5. WHERE API key validation is possible THEN the system SHALL test the key validity before accepting it
+
+### Requirement 14
+
+**User Story:** As a user, I want all LLM responses to be streamed in real-time, so that I can see the AI's response as it's being generated rather than waiting for completion.
+
+#### Acceptance Criteria
+
+1. WHEN requesting LLM analysis THEN the system SHALL establish a streaming connection to the configured LLM service
+2. WHEN LLM generates responses THEN the system SHALL display partial responses in real-time as tokens are received
+3. WHEN streaming responses THEN the system SHALL provide visual indicators showing that content is being generated
+4. WHEN streaming is complete THEN the system SHALL clearly indicate that the response is finished
+5. WHERE streaming fails or is interrupted THEN the system SHALL handle errors gracefully and provide options to retry
+
+### Requirement 15
+
+**User Story:** As a user, I want the selected LLM configuration to be used consistently across all AI features, so that I have a unified experience throughout the application.
+
+#### Acceptance Criteria
+
+1. WHEN I configure LLM settings THEN all AI features in the application SHALL use the same configuration
+2. WHEN generating domain descriptions THEN the system SHALL use the configured LLM provider and model
+3. WHEN performing decision analysis with AI assistance THEN the system SHALL use the configured LLM settings
+4. WHEN LLM configuration changes THEN all AI features SHALL immediately use the updated configuration
+5. WHERE different AI features have specific requirements THEN the system SHALL adapt the base configuration appropriately while maintaining consistency
+
+### Requirement 16
+
+**User Story:** As a user, I want all button icons to be visible and properly displayed, so that I can easily identify and interact with interface elements.
+
+#### Acceptance Criteria
+
+1. WHEN buttons with icons are rendered THEN the system SHALL ensure all icons are visible and properly loaded
+2. WHEN icon resources are missing or fail to load THEN the system SHALL display fallback text or alternative visual indicators
+3. WHEN buttons are displayed across different pages THEN all icons SHALL maintain consistent visibility and styling
+4. WHEN icon fonts or SVG resources are used THEN the system SHALL ensure proper loading and rendering of icon assets
+5. WHERE icon display issues occur THEN the system SHALL provide clear visual feedback indicating the intended button function

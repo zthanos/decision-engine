@@ -22,10 +22,12 @@ defmodule DecisionEngineWeb.DecisionLive.Settings do
     <div class="min-h-screen bg-base-200">
       <div class="navbar bg-primary text-primary-content shadow-lg">
         <div class="flex-1">
-          <a href="/" class="btn btn-ghost text-xl">
-            <span class="hero-sparkles w-6 h-6 mr-2"></span>
-            Decision Engine
-          </a>
+          <.logo_with_text
+            class="btn btn-ghost text-xl"
+            size="h-6 w-auto"
+            text="Decision Engine"
+            href="/"
+          />
         </div>
         <div class="flex-none gap-2">
           <.nav_link navigate="/" class="btn btn-ghost btn-sm">
@@ -97,7 +99,7 @@ defmodule DecisionEngineWeb.DecisionLive.Settings do
               <div class="card bg-base-200">
                 <div class="card-body">
                   <h3 class="card-title text-base">LM Studio (Local)</h3>
-                  <p class="text-sm">OpenAI-compatible at http://127.0.0.1:1234</p>
+                  <p class="text-sm">OpenAI-compatible at http://localhost:1234</p>
                 </div>
               </div>
 

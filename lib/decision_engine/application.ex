@@ -14,6 +14,10 @@ defmodule DecisionEngine.Application do
       {Registry, keys: :unique, name: DecisionEngine.StreamRegistry},
       # Start the RuleConfig cache for domain configurations
       DecisionEngine.RuleConfig,
+      # Start the HistoryManager for analysis history persistence
+      DecisionEngine.HistoryManager,
+      # Start the DescriptionGenerator for LLM-powered domain descriptions
+      DecisionEngine.DescriptionGenerator,
       # Start the endpoint so the web interface is available
       DecisionEngineWeb.Endpoint
     ]

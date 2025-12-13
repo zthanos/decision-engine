@@ -21,5 +21,8 @@ config :decision_engine, DecisionEngineWeb.Endpoint,
   ]
 
 config :logger, :console, format: "[$level] $message\n"
+
+# Reduce log level to minimize connection error noise
+config :logger, level: :info
 config :phoenix, :stacktrace_depth, 20
 config :phoenix, :plug_init_mode, :runtime

@@ -142,7 +142,7 @@ defmodule DecisionEngine.ConfigBuilder do
     %{
       # LM Studio exposes an OpenAI-compatible API
       provider: :lm_studio,
-      api_url: "http://172.22.176.1:#{port}/v1/chat/completions",
+      api_url: "http://localhost:#{port}/v1/chat/completions",
       api_key: nil,
       model: model,
       temperature: Keyword.get(opts, :temperature, 0.1),

@@ -306,6 +306,29 @@ Hooks.StreamingResult = {
   }
 }
 
+// Hook for handling file downloads
+window.addEventListener("phx:download", (event) => {
+  const { filename, data, mime_type } = event.detail
+  
+  // Create blob and download link
+  const blob = new Blob([data], { type: mime_type })
+  const url = window.URL.createObjectURL(blob)
+  
+  // Create temporary download link
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.style.display = 'none'
+  
+  // Trigger download
+  document.body.appendChild(link)
+  link.click()
+  
+  // Cleanup
+  document.body.removeChild(link)
+  window.URL.revokeObjectURL(url)
+})
+
 let liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},

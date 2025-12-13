@@ -4,6 +4,8 @@ defmodule DecisionEngineWeb.CoreComponents do
   # alias Phoenix.LiveView.JS
   # import DecisionEngineWeb.Gettext
 
+
+
   attr :navigate, :string, default: nil
   attr :patch, :string, default: nil
   attr :href, :string, default: nil
@@ -11,12 +13,22 @@ defmodule DecisionEngineWeb.CoreComponents do
   attr :method, :string, default: nil
   attr :csrf_token, :any, default: nil
   attr :class, :string, default: nil
+  attr :aria_label, :string, default: nil
+  attr :aria_current, :string, default: nil
   attr :rest, :global, include: ~w(download hreflang referrerpolicy rel target type)
   slot :inner_block, required: true
 
   def nav_link(%{navigate: to} = assigns) when is_binary(to) do
     ~H"""
-    <a href={@navigate} data-phx-link="redirect" data-phx-link-state="push" class={@class} {@rest}>
+    <a
+      href={@navigate}
+      data-phx-link="redirect"
+      data-phx-link-state="push"
+      class={@class}
+      aria-label={@aria_label}
+      aria-current={@aria_current}
+      {@rest}
+    >
       <%= render_slot(@inner_block) %>
     </a>
     """
@@ -24,7 +36,15 @@ defmodule DecisionEngineWeb.CoreComponents do
 
   def nav_link(%{patch: to} = assigns) when is_binary(to) do
     ~H"""
-    <a href={@patch} data-phx-link="patch" data-phx-link-state="push" class={@class} {@rest}>
+    <a
+      href={@patch}
+      data-phx-link="patch"
+      data-phx-link-state="push"
+      class={@class}
+      aria-label={@aria_label}
+      aria-current={@aria_current}
+      {@rest}
+    >
       <%= render_slot(@inner_block) %>
     </a>
     """
@@ -32,7 +52,13 @@ defmodule DecisionEngineWeb.CoreComponents do
 
   def nav_link(%{} = assigns) do
     ~H"""
-    <a href={@href} class={@class} {@rest}>
+    <a
+      href={@href}
+      class={@class}
+      aria-label={@aria_label}
+      aria-current={@aria_current}
+      {@rest}
+    >
       <%= render_slot(@inner_block) %>
     </a>
     """
@@ -53,26 +79,35 @@ defmodule DecisionEngineWeb.CoreComponents do
 
   def decision_table(assigns) do
     ~H"""
-    <div class={"decision-table-wrapper #{@class}"}>
+    <div class={"decision-table-wrapper #{@class}"} role="region" aria-label="Decision patterns table">
       <%= if length(@patterns) > 0 do %>
-        <div class="space-y-4">
+        <div class="space-y-4" role="list" aria-label="Decision patterns">
           <%= for {pattern, index} <- Enum.with_index(Enum.take(@patterns, @max_patterns)) do %>
-            <div class="decision-pattern-card bg-base-50 rounded-lg p-4 border border-base-200 hover:border-primary/30 transition-all duration-300">
+            <div
+              class="decision-pattern-card bg-base-50 rounded-lg p-4 border border-base-200 hover:border-primary/30 transition-all duration-300 focus-within:ring-2 focus-within:ring-primary/50"
+              role="listitem"
+              tabindex="0"
+              aria-label={"Pattern #{index + 1}: #{pattern["outcome"]} with #{trunc((pattern["score"] || 0.5) * 100)}% confidence"}
+            >
               <!-- Pattern Header -->
               <div class="flex items-center justify-between mb-3">
                 <div class="flex items-center gap-3">
-                  <div class="badge badge-primary badge-lg font-mono">
+                  <div class="badge badge-primary badge-lg font-mono" aria-label={"Pattern ID: #{pattern["id"] || "pattern_#{index + 1}"}"}>
                     <%= pattern["id"] || "pattern_#{index + 1}" %>
                   </div>
                   <div class="flex items-center gap-2">
-                    <span class="text-sm font-semibold text-base-content/80">→</span>
-                    <span class="font-semibold text-base-content"><%= pattern["outcome"] %></span>
+                    <span class="text-sm font-semibold text-base-content/80" aria-hidden="true">→</span>
+                    <span class="font-semibold text-base-content" aria-label="Outcome"><%= pattern["outcome"] %></span>
                   </div>
                 </div>
                 <div class="flex items-center gap-2">
                   <div class="radial-progress text-sm font-bold"
                        style={"--value:#{trunc((pattern["score"] || 0.5) * 100)}; --size:3rem; --thickness:4px;"}
-                       role="progressbar">
+                       role="progressbar"
+                       aria-valuenow={trunc((pattern["score"] || 0.5) * 100)}
+                       aria-valuemin="0"
+                       aria-valuemax="100"
+                       aria-label={"Confidence score: #{trunc((pattern["score"] || 0.5) * 100)} percent"}>
                     <%= trunc((pattern["score"] || 0.5) * 100) %>%
                   </div>
                 </div>
@@ -81,29 +116,33 @@ defmodule DecisionEngineWeb.CoreComponents do
               <!-- Pattern Summary -->
               <%= if pattern["summary"] do %>
                 <div class="mb-3">
-                  <p class="text-sm text-base-content/70 italic">
+                  <p class="text-sm text-base-content/70 italic" aria-label="Pattern description">
                     <%= pattern["summary"] %>
                   </p>
                 </div>
               <% end %>
 
               <!-- Conditions Grid -->
-              <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" role="group" aria-label="Pattern conditions">
                 <!-- Use When Conditions -->
                 <%= if pattern["use_when"] && length(pattern["use_when"]) > 0 do %>
-                  <div class="condition-group">
+                  <div class="condition-group" role="group" aria-label="Use when conditions">
                     <div class="flex items-center gap-2 mb-2">
-                      <span class="badge badge-success badge-sm font-semibold">USE WHEN</span>
-                      <span class="text-xs text-base-content/60">
+                      <span class="badge badge-success badge-sm font-semibold" role="status">USE WHEN</span>
+                      <span class="text-xs text-base-content/60" aria-label={"#{length(pattern["use_when"])} conditions"}>
                         <%= length(pattern["use_when"]) %> condition<%= if length(pattern["use_when"]) > 1, do: "s" %>
                       </span>
                     </div>
-                    <div class="space-y-2">
+                    <div class="space-y-2" role="list">
                       <%= for condition <- pattern["use_when"] do %>
-                        <div class="condition-item bg-success/10 border border-success/20 rounded-md p-2">
+                        <div
+                          class="condition-item bg-success/10 border border-success/20 rounded-md p-2"
+                          role="listitem"
+                          aria-label={"Condition: #{condition["field"]} #{format_operator(condition["op"])} #{format_value_display(condition["value"])}"}
+                        >
                           <div class="text-xs font-mono text-success">
                             <span class="font-semibold"><%= condition["field"] %></span>
-                            <span class="mx-1 opacity-70"><%= format_operator(condition["op"]) %></span>
+                            <span class="mx-1 opacity-70" aria-hidden="true"><%= format_operator(condition["op"]) %></span>
                             <span class="font-medium"><%= format_value_display(condition["value"]) %></span>
                           </div>
                         </div>
@@ -114,19 +153,23 @@ defmodule DecisionEngineWeb.CoreComponents do
 
                 <!-- Avoid When Conditions -->
                 <%= if pattern["avoid_when"] && length(pattern["avoid_when"]) > 0 do %>
-                  <div class="condition-group">
+                  <div class="condition-group" role="group" aria-label="Avoid when conditions">
                     <div class="flex items-center gap-2 mb-2">
-                      <span class="badge badge-error badge-sm font-semibold">AVOID WHEN</span>
-                      <span class="text-xs text-base-content/60">
+                      <span class="badge badge-error badge-sm font-semibold" role="status">AVOID WHEN</span>
+                      <span class="text-xs text-base-content/60" aria-label={"#{length(pattern["avoid_when"])} conditions"}>
                         <%= length(pattern["avoid_when"]) %> condition<%= if length(pattern["avoid_when"]) > 1, do: "s" %>
                       </span>
                     </div>
-                    <div class="space-y-2">
+                    <div class="space-y-2" role="list">
                       <%= for condition <- pattern["avoid_when"] do %>
-                        <div class="condition-item bg-error/10 border border-error/20 rounded-md p-2">
+                        <div
+                          class="condition-item bg-error/10 border border-error/20 rounded-md p-2"
+                          role="listitem"
+                          aria-label={"Condition: #{condition["field"]} #{format_operator(condition["op"])} #{format_value_display(condition["value"])}"}
+                        >
                           <div class="text-xs font-mono text-error">
                             <span class="font-semibold"><%= condition["field"] %></span>
-                            <span class="mx-1 opacity-70"><%= format_operator(condition["op"]) %></span>
+                            <span class="mx-1 opacity-70" aria-hidden="true"><%= format_operator(condition["op"]) %></span>
                             <span class="font-medium"><%= format_value_display(condition["value"]) %></span>
                           </div>
                         </div>
@@ -138,7 +181,7 @@ defmodule DecisionEngineWeb.CoreComponents do
                 <!-- No Conditions Message -->
                 <%= if (!pattern["use_when"] || length(pattern["use_when"]) == 0) &&
                        (!pattern["avoid_when"] || length(pattern["avoid_when"]) == 0) do %>
-                  <div class="col-span-full text-center py-4">
+                  <div class="col-span-full text-center py-4" role="status" aria-live="polite">
                     <span class="text-base-content/40 text-sm italic">No conditions configured for this pattern</span>
                   </div>
                 <% end %>
@@ -146,17 +189,19 @@ defmodule DecisionEngineWeb.CoreComponents do
 
               <!-- Typical Use Cases -->
               <%= if pattern["typical_use_cases"] && length(pattern["typical_use_cases"]) > 0 do %>
-                <div class="mt-4 pt-3 border-t border-base-200">
+                <div class="mt-4 pt-3 border-t border-base-200" role="group" aria-label="Typical use cases">
                   <div class="flex items-center gap-2 mb-2">
-                    <span class="hero-light-bulb w-4 h-4 text-warning"></span>
+                    <span class="hero-light-bulb w-4 h-4 text-warning" aria-hidden="true"></span>
                     <span class="text-xs font-semibold text-base-content/70">Typical Use Cases</span>
                   </div>
-                  <div class="flex flex-wrap gap-1">
+                  <div class="flex flex-wrap gap-1" role="list" aria-label="Use case examples">
                     <%= for use_case <- Enum.take(pattern["typical_use_cases"], 4) do %>
-                      <span class="badge badge-outline badge-xs"><%= use_case %></span>
+                      <span class="badge badge-outline badge-xs" role="listitem"><%= use_case %></span>
                     <% end %>
                     <%= if length(pattern["typical_use_cases"]) > 4 do %>
-                      <span class="badge badge-ghost badge-xs">+<%= length(pattern["typical_use_cases"]) - 4 %> more</span>
+                      <span class="badge badge-ghost badge-xs" role="listitem" aria-label={"#{length(pattern["typical_use_cases"]) - 4} additional use cases"}>
+                        +<%= length(pattern["typical_use_cases"]) - 4 %> more
+                      </span>
                     <% end %>
                   </div>
                 </div>
@@ -166,7 +211,7 @@ defmodule DecisionEngineWeb.CoreComponents do
         </div>
 
         <%= if length(@patterns) > @max_patterns do %>
-          <div class="text-center mt-4 pt-4 border-t border-base-200">
+          <div class="text-center mt-4 pt-4 border-t border-base-200" role="status" aria-live="polite">
             <span class="text-sm text-base-content/60">
               Showing <%= @max_patterns %> of <%= length(@patterns) %> patterns
             </span>
@@ -176,8 +221,8 @@ defmodule DecisionEngineWeb.CoreComponents do
           </div>
         <% end %>
       <% else %>
-        <div class="text-center py-12 text-base-content/60">
-          <span class="hero-table-cells w-16 h-16 mx-auto mb-4 opacity-30"></span>
+        <div class="text-center py-12 text-base-content/60" role="status" aria-live="polite">
+          <span class="hero-table-cells w-16 h-16 mx-auto mb-4 opacity-30" aria-hidden="true"></span>
           <h3 class="text-lg font-semibold mb-2">No Decision Patterns</h3>
           <p class="text-sm">This domain doesn't have any decision patterns configured yet.</p>
           <p class="text-xs mt-1 opacity-70">Edit the domain to add patterns.</p>

@@ -60,6 +60,7 @@ defmodule DecisionEngineWeb do
     quote do
       import Phoenix.HTML
       import DecisionEngineWeb.CoreComponents
+      import DecisionEngineWeb.Components.Logo
       import DecisionEngineWeb.Gettext
 
       alias Phoenix.LiveView.JS
