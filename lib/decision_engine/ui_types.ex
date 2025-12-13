@@ -24,7 +24,7 @@ defmodule DecisionEngine.UITypes do
     provider: String.t(),
     model: String.t(),
     processing_time: integer(),
-    streaming_enabled: boolean()
+
   }
 
   @typedoc """
@@ -241,7 +241,7 @@ defmodule DecisionEngine.UITypes do
       provider: get_field(metadata, :provider, "unknown"),
       model: get_field(metadata, :model, "unknown"),
       processing_time: get_field(metadata, :processing_time, 0),
-      streaming_enabled: get_field(metadata, :streaming_enabled, false)
+
     }
   end
 

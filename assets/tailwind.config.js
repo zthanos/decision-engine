@@ -8,7 +8,19 @@ module.exports = {
     extend: {},
   },
   plugins: [
-    require("daisyui")
+    require("daisyui"),
+    // Add Heroicons plugin if available
+    function({ addUtilities }) {
+      // This will be enhanced when Heroicons CSS is properly loaded
+      addUtilities({
+        '.hero-icon': {
+          'display': 'inline-block',
+          'width': '1.25rem',
+          'height': '1.25rem',
+          'flex-shrink': '0',
+        }
+      })
+    }
   ],
   daisyui: {
     themes: [

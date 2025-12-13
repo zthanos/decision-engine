@@ -24,21 +24,23 @@ defmodule DecisionEngine.LLMClient do
 
   # New domain-aware extract_signals function
   def extract_signals(user_scenario, config, domain, schema_module, rule_config, retry_count \\ 0) do
-    prompt = build_extraction_prompt(user_scenario, domain, schema_module, rule_config, retry_count)
+    with {:ok, final_config} <- get_unified_config(config) do
+      prompt = build_extraction_prompt(user_scenario, domain, schema_module, rule_config, retry_count)
 
-    case call_llm(prompt, config) do
-      {:ok, response} ->
-        case parse_and_validate_signals(response, user_scenario, config, domain, schema_module, retry_count) do
-          {:retry_needed, scenario, config, domain, schema_module, new_retry_count} ->
-            extract_signals(scenario, config, domain, schema_module, rule_config, new_retry_count)
+      case call_llm(prompt, final_config) do
+        {:ok, response} ->
+          case parse_and_validate_signals(response, user_scenario, final_config, domain, schema_module, retry_count) do
+            {:retry_needed, scenario, config, domain, schema_module, new_retry_count} ->
+              extract_signals(scenario, config, domain, schema_module, rule_config, new_retry_count)
 
-          result ->
-            result
-        end
+            result ->
+              result
+          end
 
-      {:error, reason} ->
-        Logger.error("LLM API call failed for domain #{domain}: #{inspect(reason)}")
-        {:error, "Failed to call LLM API: #{inspect(reason)}"}
+        {:error, reason} ->
+          Logger.error("LLM API call failed for domain #{domain}: #{inspect(reason)}")
+          {:error, "Failed to call LLM API: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -57,14 +59,16 @@ defmodule DecisionEngine.LLMClient do
   end
 
   def generate_justification(signals, decision_result, config, domain) do
-    prompt = build_justification_prompt(signals, decision_result, domain)
+    with {:ok, final_config} <- get_unified_config(config) do
+      prompt = build_justification_prompt(signals, decision_result, domain)
 
-    case call_llm(prompt, config) do
-      {:ok, response} ->
-        {:ok, response}
+      case call_llm(prompt, final_config) do
+        {:ok, response} ->
+          {:ok, response}
 
-      {:error, reason} ->
-        {:error, "Failed to generate justification for domain #{domain}: #{inspect(reason)}"}
+        {:error, reason} ->
+          {:error, "Failed to generate justification for domain #{domain}: #{inspect(reason)}"}
+      end
     end
   end
 
@@ -78,19 +82,21 @@ defmodule DecisionEngine.LLMClient do
 
   ## Parameters
   - prompt: String prompt to send to LLM
-  - config: LLM configuration map
+  - config: LLM configuration map (optional, uses LLMConfigManager if nil)
 
   ## Returns
   - {:ok, String.t()} with generated text
   - {:error, term()} on failure
   """
-  @spec generate_text(String.t(), map()) :: {:ok, String.t()} | {:error, term()}
-  def generate_text(prompt, config) do
-    case call_llm(prompt, config) do
-      {:ok, response} ->
-        {:ok, response}
-      {:error, reason} ->
-        {:error, reason}
+  @spec generate_text(String.t(), map() | nil) :: {:ok, String.t()} | {:error, term()}
+  def generate_text(prompt, config \\ nil) do
+    with {:ok, final_config} <- get_unified_config(config) do
+      case call_llm(prompt, final_config) do
+        {:ok, response} ->
+          {:ok, response}
+        {:error, reason} ->
+          {:error, reason}
+      end
     end
   end
 
@@ -119,20 +125,22 @@ defmodule DecisionEngine.LLMClient do
   """
   @spec stream_justification(map(), map(), map(), atom(), pid()) :: :ok | {:error, term()}
   def stream_justification(signals, decision_result, config, domain, stream_pid) do
-    prompt = build_justification_prompt(signals, decision_result, domain)
+    with {:ok, final_config} <- get_unified_config(config) do
+      prompt = build_justification_prompt(signals, decision_result, domain)
 
-    # Configure LLM for streaming mode
-    streaming_config = Map.put(config, :stream, true)
+      # Configure LLM for streaming mode
+      streaming_config = Map.put(final_config, :stream, true)
 
-    Logger.info("Starting LLM streaming for domain #{domain}")
+      Logger.info("Starting LLM streaming for domain #{domain}")
 
-    case call_llm_stream(prompt, streaming_config, stream_pid) do
-      :ok ->
-        Logger.debug("LLM streaming initiated successfully for domain #{domain}")
-        :ok
-      {:error, reason} ->
-        Logger.error("Failed to start LLM streaming for domain #{domain}: #{inspect(reason)}")
-        {:error, reason}
+      case call_llm_stream(prompt, streaming_config, stream_pid) do
+        :ok ->
+          Logger.debug("LLM streaming initiated successfully for domain #{domain}")
+          :ok
+        {:error, reason} ->
+          Logger.error("Failed to start LLM streaming for domain #{domain}: #{inspect(reason)}")
+          {:error, reason}
+      end
     end
   end
 
@@ -380,7 +388,7 @@ defmodule DecisionEngine.LLMClient do
       {"content-type", "application/json"}
     ]
 
-    auth_header = case config.api_key do
+    auth_header = case Map.get(config, :api_key) do
       nil -> []
       key -> [{"authorization", "Bearer #{key}"}]
     end
@@ -707,6 +715,60 @@ defmodule DecisionEngine.LLMClient do
       max_tokens: Map.get(config, :max_tokens, 2000),
       stream: true
     }
+  end
+
+  # Gets unified LLM configuration from LLMConfigManager or uses provided config
+  @spec get_unified_config(map() | nil) :: {:ok, map()} | {:error, term()}
+  defp get_unified_config(nil) do
+    # Use LLMConfigManager for centralized configuration
+    case DecisionEngine.LLMConfigManager.get_current_config() do
+      {:ok, config} ->
+        # Convert string keys to atoms for compatibility with existing LLMClient code
+        normalized_config = normalize_config_keys(config)
+        {:ok, normalized_config}
+
+      {:error, :api_key_required} ->
+        {:error, "API key required. Please configure LLM settings in the Settings page."}
+
+      {:error, reason} ->
+        Logger.warning("Failed to get LLM config from LLMConfigManager: #{inspect(reason)}")
+        {:error, "LLM configuration not available. Please configure LLM settings in the Settings page."}
+    end
+  end
+
+  defp get_unified_config(config) when is_map(config) do
+    # Use provided config but normalize keys for consistency
+    normalized_config = normalize_config_keys(config)
+    {:ok, normalized_config}
+  end
+
+  # Normalizes configuration keys to atoms for compatibility with existing LLMClient code
+  defp normalize_config_keys(config) do
+    config
+    |> Enum.map(fn
+      {key, value} when is_binary(key) ->
+        case key do
+          "provider" -> {:provider, String.to_existing_atom(value)}
+          "api_url" -> {:api_url, value}
+          "endpoint" -> {:api_url, value}  # Map endpoint to api_url
+          "api_key" -> {:api_key, value}
+          "model" -> {:model, value}
+          "temperature" -> {:temperature, value}
+          "max_tokens" -> {:max_tokens, value}
+          "timeout" -> {:timeout, value}
+          "streaming" -> {:streaming, value}
+          "extra_headers" -> {:extra_headers, value}
+          "json_mode" -> {:json_mode, value}
+          _ -> {String.to_atom(key), value}
+        end
+      {key, value} when is_atom(key) ->
+        case key do
+          :provider when is_binary(value) -> {:provider, String.to_existing_atom(value)}
+          :endpoint -> {:api_url, value}  # Map endpoint to api_url
+          _ -> {key, value}
+        end
+    end)
+    |> Map.new()
   end
 
   # Simulate streaming for testing purposes when no provider is configured

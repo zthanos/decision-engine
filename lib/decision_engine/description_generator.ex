@@ -56,6 +56,9 @@ defmodule DecisionEngine.DescriptionGenerator do
   @doc """
   Gets a cached description for a domain.
 
+  This function reads directly from ETS cache to avoid blocking when the GenServer
+  is busy processing description generation requests.
+
   ## Parameters
   - domain: Atom representing the domain
 
@@ -65,7 +68,19 @@ defmodule DecisionEngine.DescriptionGenerator do
   """
   @spec get_cached_description(atom()) :: {:ok, String.t()} | {:error, :not_found}
   def get_cached_description(domain) do
-    GenServer.call(__MODULE__, {:get_cached_description, domain})
+    # Read directly from ETS to avoid blocking the GenServer
+    try do
+      case :ets.lookup(@cache_table, domain) do
+        [{^domain, description}] ->
+          {:ok, description}
+        [] ->
+          {:error, :not_found}
+      end
+    rescue
+      ArgumentError ->
+        # ETS table doesn't exist yet (GenServer not started)
+        {:error, :not_found}
+    end
   end
 
   @doc """
@@ -178,19 +193,7 @@ defmodule DecisionEngine.DescriptionGenerator do
     end
   end
 
-  @impl true
-  def handle_call({:get_cached_description, domain}, _from, state) do
-    case :ets.lookup(@cache_table, domain) do
-      [{^domain, description}] ->
-        {:reply, {:ok, description}, state}
-      [] ->
-        # Fallback to state descriptions
-        case Map.get(state.descriptions, domain) do
-          nil -> {:reply, {:error, :not_found}, state}
-          description -> {:reply, {:ok, description}, state}
-        end
-    end
-  end
+
 
   @impl true
   def handle_call(:get_all_descriptions, _from, state) do
@@ -241,19 +244,17 @@ defmodule DecisionEngine.DescriptionGenerator do
   end
 
   defp get_llm_config(nil) do
-    # Use default configuration - this would typically come from application config
-    default_config = %{
-      provider: :openai,
-      api_url: "https://api.openai.com/v1/chat/completions",
-      api_key: System.get_env("OPENAI_API_KEY"),
-      model: "gpt-4",
-      temperature: 0.3,
-      max_tokens: 500
-    }
+    # Use LLMConfigManager for centralized configuration
+    case DecisionEngine.LLMConfigManager.get_current_config() do
+      {:ok, config} ->
+        {:ok, config}
 
-    case default_config.api_key do
-      nil -> {:error, :no_api_key_configured}
-      _ -> {:ok, default_config}
+      {:error, :api_key_required} ->
+        {:error, :no_api_key_configured}
+
+      {:error, reason} ->
+        Logger.warning("Failed to get LLM config from LLMConfigManager: #{inspect(reason)}")
+        {:error, :no_llm_config_available}
     end
   end
   defp get_llm_config(config), do: {:ok, config}
@@ -300,6 +301,7 @@ defmodule DecisionEngine.DescriptionGenerator do
   end
 
   defp call_llm_for_description(prompt, config) do
+    # Pass config to LLMClient which will handle unified configuration
     case DecisionEngine.LLMClient.generate_text(prompt, config) do
       {:ok, response} ->
         {:ok, response}

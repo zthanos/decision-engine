@@ -449,7 +449,7 @@ defmodule DecisionEngine.HistoryManager do
         provider: "unknown",
         model: "unknown",
         processing_time: 0,
-        streaming_enabled: false
+
       }
     }
   end

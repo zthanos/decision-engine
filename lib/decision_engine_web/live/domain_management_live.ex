@@ -2,6 +2,7 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   use DecisionEngineWeb, :live_view
   alias DecisionEngine.DomainManager
   alias DecisionEngine.DescriptionGenerator
+  import DecisionEngineWeb.Components.Icons
   require Logger
 
   @impl true
@@ -20,6 +21,13 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       |> assign(:expanded_domain, nil)
       |> assign(:generating_description, nil)
       |> assign(:description_error, nil)
+      |> assign(:pdf_upload_mode, false)
+      |> assign(:pdf_processing, false)
+      |> assign(:pdf_error, nil)
+      |> allow_upload(:pdf_file,
+          accept: ~w(.pdf),
+          max_entries: 1,
+          max_file_size: 10_000_000)  # 10MB limit
 
     {:ok, socket}
   end
@@ -284,6 +292,68 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_event("toggle_pdf_upload", _params, socket) do
+    socket =
+      socket
+      |> assign(:pdf_upload_mode, !socket.assigns.pdf_upload_mode)
+      |> assign(:pdf_error, nil)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("process_pdf", %{"domain_name" => domain_name}, socket) do
+    case uploaded_entries(socket, :pdf_file) do
+      [entry] ->
+        # Set processing state
+        socket =
+          socket
+          |> assign(:pdf_processing, true)
+          |> assign(:pdf_error, nil)
+
+        # Start async PDF processing
+        pid = self()
+        Task.start(fn ->
+          consume_uploaded_entry(socket, entry, fn %{path: path} ->
+            case DecisionEngine.PDFProcessor.process_pdf_for_domain(path, domain_name) do
+              {:ok, domain_config} ->
+                send(pid, {:pdf_processed, domain_config})
+                {:ok, :processed}
+              {:error, reason} ->
+                send(pid, {:pdf_processing_failed, reason})
+                {:ok, :failed}
+            end
+          end)
+        end)
+
+        {:noreply, socket}
+
+      [] ->
+        socket = assign(socket, :pdf_error, "Please select a PDF file to upload")
+        {:noreply, socket}
+
+      _multiple ->
+        socket = assign(socket, :pdf_error, "Please select only one PDF file")
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("validate_pdf", _params, socket) do
+    # Handle file validation during upload
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("cancel_pdf_upload", _params, socket) do
+    socket =
+      socket
+      |> assign(:pdf_upload_mode, false)
+      |> assign(:pdf_processing, false)
+      |> assign(:pdf_error, nil)
+    {:noreply, socket}
+  end
+
   defp default_pattern do
     %{
       "id" => "",
@@ -349,6 +419,41 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_info({:pdf_processed, domain_config}, socket) do
+    Logger.info("PDF processed successfully, generated domain: #{domain_config.name}")
+
+    # Switch to edit mode with the generated configuration
+    socket =
+      socket
+      |> assign(:form_mode, :new)
+      |> assign(:form_data, domain_config)
+      |> assign(:pdf_processing, false)
+      |> assign(:pdf_upload_mode, false)
+      |> assign(:errors, [])
+      |> put_flash(:info, "Domain configuration generated from PDF successfully!")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:pdf_processing_failed, reason}, socket) do
+    Logger.error("PDF processing failed: #{inspect(reason)}")
+
+    error_message = case reason do
+      :no_api_key_configured -> "LLM API key not configured. Please configure LLM settings first."
+      {:llm_call_failed, _} -> "Failed to connect to LLM service. Please check your configuration."
+      _ -> "Failed to process PDF. Please ensure the file is valid and try again."
+    end
+
+    socket =
+      socket
+      |> assign(:pdf_processing, false)
+      |> assign(:pdf_error, error_message)
+
+    {:noreply, socket}
+  end
+
   defp format_domain_name(domain_name) when is_binary(domain_name) do
     domain_name
     |> String.replace("_", " ")
@@ -363,6 +468,11 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       {:error, :not_found} -> "No description available"
     end
   end
+
+  defp error_to_string(:too_large), do: "File is too large (max 10MB)"
+  defp error_to_string(:not_accepted), do: "File type not accepted (PDF only)"
+  defp error_to_string(:too_many_files), do: "Too many files (max 1)"
+  defp error_to_string(error), do: "Upload error: #{inspect(error)}"
 
 
 
@@ -383,13 +493,13 @@ defmodule DecisionEngineWeb.DomainManagementLive do
         </div>
         <div class="flex-none gap-2" role="menubar">
           <.nav_link
-            navigate="/"
+            navigate="/analyze"
             class="btn btn-ghost btn-sm"
-            aria_label="Go to home page"
+            aria_label="Go to analyze page"
             role="menuitem"
           >
-            <span class="hero-home w-5 h-5" aria-hidden="true"></span>
-            Home
+            <span class="hero-cpu-chip w-5 h-5" aria-hidden="true"></span>
+            Analyze
           </.nav_link>
           <.nav_link
             navigate="/domains"
@@ -437,15 +547,183 @@ defmodule DecisionEngineWeb.DomainManagementLive do
                   <% end %>
                 </p>
               </div>
-              <button
-                phx-click="new_domain"
-                class="btn btn-primary"
-                aria-label="Create a new domain"
-              >
-                <span class="hero-plus w-5 h-5" aria-hidden="true"></span>
-                New Domain
-              </button>
+              <div class="flex gap-2">
+                <.icon_button
+                  name="document-arrow-up"
+                  text="From PDF"
+                  phx-click="toggle_pdf_upload"
+                  class="btn btn-secondary"
+                  icon_class="w-5 h-5"
+                  aria-label="Create domain from PDF document"
+                />
+                <.icon_button
+                  name="plus"
+                  text="New Domain"
+                  phx-click="new_domain"
+                  class="btn btn-primary"
+                  icon_class="w-5 h-5"
+                  aria-label="Create a new domain"
+                />
+              </div>
             </header>
+
+            <!-- PDF Upload Modal -->
+            <%= if @pdf_upload_mode do %>
+              <div class="card bg-base-100 shadow-xl border-2 border-secondary">
+                <div class="card-body">
+                  <div class="flex justify-between items-center mb-4">
+                    <h2 class="card-title">
+                      <span class="hero-document-arrow-up w-6 h-6 text-secondary"></span>
+                      Generate Domain from PDF
+                    </h2>
+                    <button
+                      phx-click="cancel_pdf_upload"
+                      class="btn btn-ghost btn-sm btn-square"
+                      aria-label="Cancel PDF upload"
+                    >
+                      <span class="hero-x-mark w-5 h-5"></span>
+                    </button>
+                  </div>
+
+                  <p class="text-sm text-base-content/70 mb-4">
+                    Upload a PDF document containing business rules, processes, or decision criteria.
+                    Our AI will analyze the document and generate a domain configuration automatically.
+                  </p>
+
+                  <%= if @pdf_processing do %>
+                    <div class="flex items-center justify-center py-8">
+                      <div class="text-center">
+                        <span class="loading loading-spinner loading-lg text-secondary"></span>
+                        <p class="mt-2 text-base-content/60">Processing PDF and generating domain...</p>
+                        <p class="text-xs text-base-content/50">This may take a few moments</p>
+                      </div>
+                    </div>
+                  <% else %>
+                    <form phx-submit="process_pdf" phx-change="validate_pdf">
+                      <div class="form-control mb-4">
+                        <label class="label">
+                          <span class="label-text font-semibold">Domain Name</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="domain_name"
+                          class="input input-bordered"
+                          placeholder="e.g., Invoice Processing, Customer Onboarding"
+                          required
+                        />
+                        <label class="label">
+                          <span class="label-text-alt">Choose a descriptive name for your domain</span>
+                        </label>
+                      </div>
+
+                      <div class="form-control mb-4">
+                        <label class="label">
+                          <span class="label-text font-semibold">PDF Document</span>
+                        </label>
+                        <div
+                          class="border-2 border-dashed border-base-300 rounded-lg p-6 text-center hover:border-secondary transition-colors"
+                          phx-drop-target={@uploads.pdf_file.ref}
+                        >
+                          <.live_file_input upload={@uploads.pdf_file} class="hidden" />
+                          <div class="space-y-2">
+                            <span class="hero-document-arrow-up w-12 h-12 text-base-content/40 mx-auto block"></span>
+                            <p class="text-sm">
+                              <button
+                                type="button"
+                                class="link link-secondary"
+                                onclick="document.querySelector('input[type=file]').click()"
+                              >
+                                Choose a PDF file
+                              </button>
+                              or drag and drop here
+                            </p>
+                            <p class="text-xs text-base-content/50">Maximum file size: 10MB</p>
+                          </div>
+                        </div>
+
+                        <!-- File Preview -->
+                        <%= for entry <- @uploads.pdf_file.entries do %>
+                          <div class="flex items-center justify-between p-3 bg-base-200 rounded-lg mt-2">
+                            <div class="flex items-center gap-2">
+                              <span class="hero-document w-5 h-5 text-secondary"></span>
+                              <span class="text-sm font-medium"><%= entry.client_name %></span>
+                              <span class="text-xs text-base-content/60">
+                                (<%= Float.round(entry.client_size / 1024 / 1024, 2) %> MB)
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              phx-click="cancel-upload"
+                              phx-value-ref={entry.ref}
+                              class="btn btn-ghost btn-xs btn-square"
+                              aria-label="Remove file"
+                            >
+                              <span class="hero-x-mark w-4 h-4"></span>
+                            </button>
+                          </div>
+
+                          <!-- Upload Progress -->
+                          <%= if entry.progress > 0 && entry.progress < 100 do %>
+                            <div class="mt-2">
+                              <div class="flex justify-between text-xs mb-1">
+                                <span>Uploading...</span>
+                                <span><%= entry.progress %>%</span>
+                              </div>
+                              <progress class="progress progress-secondary w-full" value={entry.progress} max="100"></progress>
+                            </div>
+                          <% end %>
+
+                          <!-- Upload Errors -->
+                          <%= for err <- upload_errors(@uploads.pdf_file, entry) do %>
+                            <div class="alert alert-error mt-2">
+                              <span class="hero-exclamation-triangle w-5 h-5"></span>
+                              <span class="text-sm"><%= error_to_string(err) %></span>
+                            </div>
+                          <% end %>
+                        <% end %>
+
+                        <!-- General Upload Errors -->
+                        <%= for err <- upload_errors(@uploads.pdf_file) do %>
+                          <div class="alert alert-error mt-2">
+                            <span class="hero-exclamation-triangle w-5 h-5"></span>
+                            <span class="text-sm"><%= error_to_string(err) %></span>
+                          </div>
+                        <% end %>
+                      </div>
+
+                      <div class="card-actions justify-end">
+                        <button
+                          type="button"
+                          phx-click="cancel_pdf_upload"
+                          class="btn btn-ghost"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          class="btn btn-secondary"
+                          disabled={length(@uploads.pdf_file.entries) == 0}
+                        >
+                          <span class="hero-sparkles w-5 h-5"></span>
+                          Generate Domain
+                        </button>
+                      </div>
+                    </form>
+                  <% end %>
+
+                  <!-- PDF Processing Error -->
+                  <%= if @pdf_error do %>
+                    <div class="alert alert-error mt-4">
+                      <span class="hero-exclamation-triangle w-6 h-6"></span>
+                      <div>
+                        <h3 class="font-bold">PDF Processing Failed</h3>
+                        <p class="text-sm"><%= @pdf_error %></p>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
 
             <!-- Description Generation Error -->
             <%= if @description_error do %>

@@ -3,6 +3,9 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 
+// Import Heroicons functionality
+import { loadHeroicons, loadSingleIcon } from "./heroicons.js"
+
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
 // SSE Client for streaming LLM responses
@@ -160,14 +163,17 @@ window.sseClient = new SSEClient()
 // LiveView hooks for streaming functionality
 let Hooks = {}
 
-Hooks.StreamingToggle = {
+// Hook to load icons when LiveView updates
+Hooks.IconLoader = {
   mounted() {
-    this.el.addEventListener('change', (event) => {
-      const isStreaming = event.target.checked
-      this.pushEvent('toggle_streaming', { streaming: isStreaming })
-    })
+    loadHeroicons();
+  },
+  updated() {
+    loadHeroicons();
   }
 }
+
+
 
 Hooks.StreamingController = {
   mounted() {
@@ -240,62 +246,64 @@ Hooks.StreamingResult = {
   },
 
   startStreaming() {
-    const justificationElement = this.el.querySelector('.streaming-justification')
-    const progressElement = this.el.querySelector('.streaming-progress')
+    const contentElement = this.el.querySelector('.streaming-content')
     
-    if (!justificationElement) {
-      console.error('Streaming justification element not found')
+    if (!contentElement) {
+      console.error('Streaming content element not found')
       return
-    }
-
-    // Show progress indicator
-    if (progressElement) {
-      progressElement.classList.remove('hidden')
     }
 
     window.sseClient.connect(this.sessionId, {
       onContentChunk: (data) => {
-        // Update the justification content progressively
-        justificationElement.innerHTML = data.renderedHtml || this.escapeHtml(data.accumulated)
+        // Send chunk event to LiveView for processing
+        this.pushEvent('streaming_chunk', {
+          session_id: this.sessionId,
+          content: data.chunk
+        })
         
-        // Scroll to bottom of content
-        justificationElement.scrollTop = justificationElement.scrollHeight
+        // Update status to active if not already
+        this.pushEvent('streaming_status_update', {
+          session_id: this.sessionId,
+          status: 'active'
+        })
       },
 
       onProcessingComplete: (data) => {
-        // Final update with complete content
-        justificationElement.innerHTML = data.finalHtml || this.escapeHtml(data.finalContent)
-        
-        // Hide progress indicator
-        if (progressElement) {
-          progressElement.classList.add('hidden')
-        }
-
         // Notify LiveView that streaming is complete
         this.pushEvent('streaming_complete', {
           session_id: this.sessionId,
           final_content: data.finalContent,
           final_html: data.finalHtml
         })
+        
+        // Update status to complete
+        this.pushEvent('streaming_status_update', {
+          session_id: this.sessionId,
+          status: 'complete'
+        })
       },
 
       onError: (error) => {
         console.error('Streaming error:', error)
-        
-        // Hide progress indicator
-        if (progressElement) {
-          progressElement.classList.add('hidden')
-        }
-
-        // Show error message
-        justificationElement.innerHTML = `<div class="alert alert-error"><span>Streaming error: ${error}</span></div>`
         
         // Notify LiveView of the error
         this.pushEvent('streaming_error', {
           session_id: this.sessionId,
           error: error
         })
+        
+        // Update status to error
+        this.pushEvent('streaming_status_update', {
+          session_id: this.sessionId,
+          status: 'error'
+        })
       }
+    })
+    
+    // Update status to connecting
+    this.pushEvent('streaming_status_update', {
+      session_id: this.sessionId,
+      status: 'connecting'
     })
   },
 
@@ -338,7 +346,16 @@ let liveSocket = new LiveSocket("/live", Socket, {
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
-window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
+window.addEventListener("phx:page-loading-stop", _info => {
+  topbar.hide()
+  // Reload icons after page navigation
+  setTimeout(loadHeroicons, 100)
+})
+
+// Load icons when LiveView connects
+window.addEventListener("phx:connected", _info => {
+  setTimeout(loadHeroicons, 100)
+})
 
 // Clean up SSE connections when navigating away
 window.addEventListener("beforeunload", () => {
@@ -371,3 +388,7 @@ liveSocket.connect()
 // >> liveSocket.enableLatencySim(1000)  // enabled for duration of browser session
 // >> liveSocket.disableLatencySim()
 window.liveSocket = liveSocket
+
+// Make icon loading functions available globally for debugging
+window.loadHeroicons = loadHeroicons
+window.loadSingleIcon = loadSingleIcon

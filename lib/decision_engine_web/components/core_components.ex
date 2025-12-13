@@ -3,6 +3,7 @@ defmodule DecisionEngineWeb.CoreComponents do
   use Phoenix.Component
   # alias Phoenix.LiveView.JS
   # import DecisionEngineWeb.Gettext
+  import DecisionEngineWeb.Components.Icons
 
 
 
@@ -67,6 +68,142 @@ defmodule DecisionEngineWeb.CoreComponents do
   def page_title(assigns) do
     ~H"""
     <title><%= @suffix %></title>
+    """
+  end
+
+  @doc """
+  Renders streaming status indicators for real-time LLM responses.
+  """
+  attr :status, :atom, required: true, doc: "Streaming status: :connecting, :active, :complete, :error, :timeout"
+  attr :session_id, :string, default: nil
+  attr :show_text, :boolean, default: true
+  attr :class, :string, default: ""
+
+  def streaming_indicator(assigns) do
+    ~H"""
+    <div class={"streaming-indicator flex items-center gap-2 #{@class}"} role="status" aria-live="polite">
+      <%= case @status do %>
+        <% :connecting -> %>
+          <span class="loading loading-spinner loading-sm text-info" aria-hidden="true"></span>
+          <%= if @show_text do %>
+            <span class="text-sm text-info font-medium">Connecting to AI...</span>
+          <% end %>
+
+        <% :active -> %>
+          <div class="flex items-center gap-1" aria-hidden="true">
+            <span class="w-2 h-2 bg-success rounded-full animate-pulse"></span>
+            <span class="w-1 h-1 bg-success/60 rounded-full animate-pulse" style="animation-delay: 0.2s"></span>
+            <span class="w-1 h-1 bg-success/40 rounded-full animate-pulse" style="animation-delay: 0.4s"></span>
+          </div>
+          <%= if @show_text do %>
+            <span class="text-sm text-success font-medium">Streaming response...</span>
+          <% end %>
+
+        <% :complete -> %>
+          <div class="w-4 h-4 rounded-full bg-success flex items-center justify-center" aria-hidden="true">
+            <.icon name="check" class="w-2.5 h-2.5 text-success-content" fallback_text="✓" />
+          </div>
+          <%= if @show_text do %>
+            <span class="text-sm text-success font-medium">Response complete</span>
+          <% end %>
+
+        <% :error -> %>
+          <div class="w-4 h-4 rounded-full bg-error flex items-center justify-center" aria-hidden="true">
+            <.icon name="x-mark" class="w-2.5 h-2.5 text-error-content" fallback_text="✕" />
+          </div>
+          <%= if @show_text do %>
+            <span class="text-sm text-error font-medium">Streaming failed</span>
+          <% end %>
+
+        <% :timeout -> %>
+          <div class="w-4 h-4 rounded-full bg-warning flex items-center justify-center" aria-hidden="true">
+            <.icon name="clock" class="w-2.5 h-2.5 text-warning-content" fallback_text="⏰" />
+          </div>
+          <%= if @show_text do %>
+            <span class="text-sm text-warning font-medium">Connection timeout</span>
+          <% end %>
+
+        <% _ -> %>
+          <span class="text-sm text-base-content/60">Unknown status</span>
+      <% end %>
+
+      <%= if @session_id && @show_text do %>
+        <span class="text-xs text-base-content/40 font-mono">(<%= String.slice(@session_id, 0..7) %>...)</span>
+      <% end %>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a streaming progress bar for content accumulation.
+  """
+  attr :content_length, :integer, default: 0
+  attr :max_length, :integer, default: 1000
+  attr :show_percentage, :boolean, default: false
+  attr :class, :string, default: ""
+
+  def streaming_progress(assigns) do
+    assigns = assign(assigns, :percentage, min(100, div(assigns.content_length * 100, assigns.max_length)))
+
+    ~H"""
+    <div class={"streaming-progress #{@class}"} role="progressbar" aria-valuenow={@percentage} aria-valuemin="0" aria-valuemax="100">
+      <div class="w-full bg-base-200 rounded-full h-1.5">
+        <div
+          class="bg-primary h-1.5 rounded-full transition-all duration-300 ease-out"
+          style={"width: #{@percentage}%"}
+        ></div>
+      </div>
+      <%= if @show_percentage do %>
+        <span class="text-xs text-base-content/60 mt-1">
+          <%= @content_length %> / <%= @max_length %> characters (<%= @percentage %>%)
+        </span>
+      <% end %>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders a streaming content container with real-time updates.
+  """
+  attr :content, :string, default: ""
+  attr :rendered_html, :string, default: nil
+  attr :streaming_status, :atom, default: :connecting
+  attr :show_raw, :boolean, default: false
+  attr :class, :string, default: ""
+
+  def streaming_content(assigns) do
+    ~H"""
+    <div class={"streaming-content #{@class}"} role="region" aria-label="Streaming content">
+      <%= if @streaming_status in [:connecting, :active] do %>
+        <div class="mb-3">
+          <.streaming_indicator status={@streaming_status} show_text={true} />
+        </div>
+      <% end %>
+
+      <div class="content-container">
+        <%= if @show_raw do %>
+          <pre class="whitespace-pre-wrap text-sm bg-base-100 p-3 rounded border font-mono"><%= @content %></pre>
+        <% else %>
+          <%= if @rendered_html do %>
+            <div class="prose prose-sm max-w-none" phx-no-format>
+              <%= Phoenix.HTML.raw(@rendered_html) %>
+            </div>
+          <% else %>
+            <div class="whitespace-pre-wrap text-sm"><%= @content %></div>
+          <% end %>
+        <% end %>
+
+        <%= if @streaming_status == :active && String.length(@content) > 0 do %>
+          <div class="inline-block w-2 h-4 bg-primary animate-pulse ml-1" aria-hidden="true"></div>
+        <% end %>
+      </div>
+
+      <%= if @streaming_status == :complete do %>
+        <div class="mt-3 pt-3 border-t border-base-200">
+          <.streaming_indicator status={:complete} show_text={true} />
+        </div>
+      <% end %>
+    </div>
     """
   end
 

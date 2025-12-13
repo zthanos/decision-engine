@@ -22,7 +22,8 @@ defmodule DecisionEngineWeb.Router do
   scope "/", DecisionEngineWeb do
     pipe_through :browser
 
-    live "/", DecisionLive.Index, :index
+    live "/", LandingLive, :index
+    live "/analyze", DecisionLive.Index, :index
     live "/history", DecisionLive.History, :index
     live "/settings", DecisionLive.Settings, :index
     live "/domains", DomainManagementLive, :index

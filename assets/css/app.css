@@ -905,3 +905,259 @@ h1, h2, h3, h4, h5, h6 {
   outline: 2px solid hsl(var(--p));
   outline-offset: 2px;
 }
+
+/* Icon System Styles */
+.icon-container {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+/* Icon with fallback mechanism */
+.icon-with-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.icon-with-fallback .icon-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-with-fallback .icon-fallback {
+  display: none;
+  font-size: 0.875em;
+  line-height: 1;
+}
+
+/* Show fallback when Heroicon is not available */
+.icon-with-fallback .icon-primary:empty + .icon-fallback,
+.icon-with-fallback .icon-primary:not([class*="hero-"]) + .icon-fallback {
+  display: inline-flex;
+}
+
+/* Hide primary icon when it's empty or invalid */
+.icon-with-fallback .icon-primary:empty,
+.icon-with-fallback .icon-primary:not([class*="hero-"]) {
+  display: none;
+}
+
+/* Heroicons base styles - these will be overridden when Heroicons CSS is loaded */
+[class*="hero-"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+}
+
+/* Fallback for when Heroicons are not loaded - show when element is empty */
+[class*="hero-"]:empty::before {
+  content: "•";
+  display: inline-block;
+  text-align: center;
+  width: 100%;
+  height: 100%;
+  line-height: 1.25rem;
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+/* Specific fallback content for common icons */
+.hero-home:empty::before { content: "🏠"; }
+.hero-plus:empty::before { content: "+"; }
+.hero-trash:empty::before { content: "🗑"; }
+.hero-pencil:empty::before { content: "✏"; }
+.hero-x-mark:empty::before { content: "✕"; }
+.hero-cog-6-tooth:empty::before { content: "⚙"; }
+.hero-clock:empty::before { content: "🕐"; }
+.hero-building-office:empty::before { content: "🏢"; }
+.hero-sparkles:empty::before { content: "✨"; }
+.hero-arrow-path:empty::before { content: "↻"; }
+.hero-ellipsis-vertical:empty::before { content: "⋮"; }
+.hero-chevron-up:empty::before { content: "▲"; }
+.hero-chevron-down:empty::before { content: "▼"; }
+.hero-table-cells:empty::before { content: "📊"; }
+.hero-information-circle:empty::before { content: "ℹ"; }
+.hero-exclamation-triangle:empty::before { content: "⚠"; }
+.hero-signal:empty::before { content: "📶"; }
+.hero-puzzle-piece:empty::before { content: "🧩"; }
+.hero-eye:empty::before { content: "👁"; }
+.hero-light-bulb:empty::before { content: "💡"; }
+.hero-x-circle:empty::before { content: "⊗"; }
+.hero-check:empty::before { content: "✓"; }
+.hero-cpu-chip:empty::before { content: "🖥"; }
+.hero-document-text:empty::before { content: "📄"; }
+.hero-rocket-launch:empty::before { content: "🚀"; }
+.hero-adjustments-horizontal:empty::before { content: "⚙"; }
+.hero-bolt:empty::before { content: "⚡"; }
+.hero-document-arrow-up:empty::before { content: "📤"; }
+.hero-chart-bar:empty::before { content: "📊"; }
+
+/* Button icon spacing */
+.btn .icon-with-fallback + .button-text,
+.btn [class*="hero-"] + span:not(.icon-fallback) {
+  margin-left: 0.5rem;
+}
+
+.btn .button-text + .icon-with-fallback,
+.btn span:not(.icon-fallback) + [class*="hero-"] {
+  margin-left: 0.5rem;
+}
+
+/* Icon size variants */
+.icon-xs, .icon-xs [class*="hero-"] { width: 0.75rem; height: 0.75rem; }
+.icon-sm, .icon-sm [class*="hero-"] { width: 1rem; height: 1rem; }
+.icon-md, .icon-md [class*="hero-"] { width: 1.25rem; height: 1.25rem; }
+.icon-lg, .icon-lg [class*="hero-"] { width: 1.5rem; height: 1.5rem; }
+.icon-xl, .icon-xl [class*="hero-"] { width: 2rem; height: 2rem; }
+
+/* High contrast mode support for icons */
+@media (prefers-contrast: high) {
+  [class*="hero-"] {
+    filter: contrast(2);
+  }
+  
+  .icon-fallback {
+    font-weight: bold;
+  }
+}
+
+/* Reduced motion support for icons */
+@media (prefers-reduced-motion: reduce) {
+  [class*="hero-"] {
+    transition: none !important;
+  }
+}
+
+/* Print styles for icons */
+@media print {
+  [class*="hero-"] {
+    filter: grayscale(1);
+  }
+  
+  .icon-fallback {
+    display: inline-flex !important;
+  }
+  
+  .icon-primary {
+    display: none !important;
+  }
+}
+
+/* Landing Page Specific Styles */
+.hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(135deg, 
+    hsl(var(--p) / 0.1) 0%, 
+    hsl(var(--b2)) 50%, 
+    hsl(var(--s) / 0.1) 100%);
+  z-index: -1;
+}
+
+.hero-content {
+  position: relative;
+  z-index: 1;
+}
+
+/* Gradient text effect */
+.bg-gradient-to-r {
+  background: linear-gradient(to right, hsl(var(--p)), hsl(var(--s)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Card hover effects */
+.card:hover {
+  transform: translateY(-2px);
+  transition: transform 0.2s ease-in-out;
+}
+
+/* Icon display fixes */
+.icon-with-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Ensure proper spacing for feature cards */
+.feature-grid {
+  display: grid;
+  gap: 2rem;
+}
+
+/* Navigation card hover effects */
+a.card:hover {
+  text-decoration: none;
+  transform: translateY(-4px);
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+}
+
+/* Stats section styling */
+.stats {
+  background: hsl(var(--b1) / 0.8);
+  backdrop-filter: blur(8px);
+}
+
+/* Footer styling */
+.footer {
+  background: hsl(var(--b3));
+}
+
+/* Responsive text sizing */
+@media (max-width: 768px) {
+  .text-6xl {
+    font-size: 3rem;
+    line-height: 1;
+  }
+  
+  .text-4xl {
+    font-size: 2.25rem;
+    line-height: 2.5rem;
+  }
+}
+
+/* Animation classes */
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Step number circles */
+.step-circle {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1rem;
+  font-weight: bold;
+  font-size: 1.5rem;
+}

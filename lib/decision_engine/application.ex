@@ -18,6 +18,10 @@ defmodule DecisionEngine.Application do
       DecisionEngine.HistoryManager,
       # Start the DescriptionGenerator for LLM-powered domain descriptions
       DecisionEngine.DescriptionGenerator,
+      # Start the LLMConfigManager for centralized LLM configuration
+      DecisionEngine.LLMConfigManager,
+      # Start the StreamingHandler for real-time LLM response streaming
+      DecisionEngine.StreamingHandler,
       # Start the endpoint so the web interface is available
       DecisionEngineWeb.Endpoint
     ]

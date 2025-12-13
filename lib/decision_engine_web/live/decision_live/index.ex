@@ -2,6 +2,7 @@
 defmodule DecisionEngineWeb.DecisionLive.Index do
   use DecisionEngineWeb, :live_view
   alias DecisionEngine.DescriptionGenerator
+
   require Logger
 
   @impl true
@@ -25,14 +26,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
      |> assign(:processing, false)
      |> assign(:result, nil)
      |> assign(:error, nil)
-     |> assign(:provider, "ollama")
-     |> assign(:api_key, "")
-     |> assign(:model, "ministral-3:3b")
      |> assign(:domain, default_domain)
      |> assign(:available_domains, available_domains)
-     |> assign(:streaming_enabled, false)
+     |> assign(:streaming_enabled, true)
      |> assign(:streaming_session_id, nil)
      |> assign(:streaming_result, nil)
+     |> assign(:streaming_status, nil)
      |> assign(:history, history)}
   end
 
@@ -41,32 +40,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     {:noreply, assign(socket, scenario: params["scenario"] || "")}
   end
 
-  @impl true
-  def handle_event("update_provider", %{"provider" => provider}, socket) do
-    Logger.info("Provider selection changed to: #{provider}")
-    default_model = case provider do
-      "openai" -> "gpt-4o"
-      "anthropic" -> "claude-sonnet-4-20250514"
-      "ollama" -> "ministral-3:3b"
-      "openrouter" -> "anthropic/claude-3.5-sonnet"
-      "lm_studio" -> "ministral-3-14b-reasoning-2512"
-      _ -> ""
-    end
 
-    {:noreply, socket |> assign(:provider, provider) |> assign(:model, default_model)}
-  end
-
-  @impl true
-  def handle_event("update_api_key", %{"api_key" => api_key}, socket) do
-    Logger.info("API key updated")
-    {:noreply, assign(socket, :api_key, api_key)}
-  end
-
-  @impl true
-  def handle_event("update_model", %{"model" => model}, socket) do
-    Logger.info("Model updated to: #{model}")
-    {:noreply, assign(socket, :model, model)}
-  end
 
   @impl true
   def handle_event("update_domain", %{"domain" => domain_string}, socket) do
@@ -93,11 +67,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_event("toggle_streaming", %{"streaming" => streaming}, socket) do
-    Logger.info("Streaming mode toggled: #{streaming}")
-    {:noreply, assign(socket, :streaming_enabled, streaming)}
-  end
+
 
   @impl true
   def handle_event("process", %{"decision" => params}, socket) do
@@ -114,35 +84,24 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
         |> assign(:streaming_result, nil)
         |> assign(:streaming_session_id, nil)
 
-      if socket.assigns.streaming_enabled do
-        # Process with streaming
-        session_id = generate_session_id()
+      # Always use streaming
+      session_id = generate_session_id()
 
-        socket = assign(socket, :streaming_session_id, session_id)
+      socket = assign(socket, :streaming_session_id, session_id)
 
-        # Send event to client to establish SSE connection first
-        socket = push_event(socket, "establish_sse", %{session_id: session_id})
+      # Send event to client to establish SSE connection first
+      socket = push_event(socket, "establish_sse", %{session_id: session_id})
 
-        # Start processing after allowing time for SSE connection
-        pid = self()
-        Task.start(fn ->
-          # Wait for SSE connection to establish with retry logic
-          wait_for_sse_connection(session_id, 5, 200)
-          result = process_scenario_streaming(scenario, socket.assigns, session_id)
-          send(pid, {:process_streaming_started, result})
-        end)
+      # Start processing - the SSE connection will be established when needed
+      pid = self()
+      Task.start(fn ->
+        # Small delay to allow SSE connection to establish
+        Process.sleep(500)
+        result = process_scenario_streaming(scenario, socket.assigns, session_id)
+        send(pid, {:process_streaming_started, result})
+      end)
 
-        {:noreply, socket}
-      else
-        # Process traditionally
-        pid = self()
-        Task.start(fn ->
-          result = process_scenario(scenario, socket.assigns)
-          send(pid, {:process_complete, result})
-        end)
-
-        {:noreply, socket}
-      end
+      {:noreply, socket}
     end
   end
 
@@ -216,30 +175,85 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
   end
 
   @impl true
-  def handle_info({:process_complete, {:ok, result}}, socket) do
-    # Save to history using HistoryManager
-    save_to_history(result)
+  def handle_event("streaming_status_update", %{"session_id" => session_id, "status" => status}, socket) do
+    Logger.debug("Streaming status update for session #{session_id}: #{status}")
 
-    # Reload history
-    history = case DecisionEngine.HistoryManager.load_history() do
-      {:ok, entries} -> Enum.take(entries, 10)
-      {:error, _} -> socket.assigns.history
+    if socket.assigns.streaming_session_id == session_id do
+      # Update streaming status in assigns for UI indicators
+      socket = assign(socket, :streaming_status, String.to_existing_atom(status))
+
+      case status do
+        "connecting" ->
+          {:noreply, socket}
+
+        "active" ->
+          {:noreply, socket}
+
+        "complete" ->
+          # Streaming completed, but we'll wait for the final content event
+          {:noreply, socket}
+
+        "error" ->
+          {:noreply,
+           socket
+           |> assign(:processing, false)
+           |> assign(:error, "Streaming connection failed")
+           |> assign(:streaming_result, nil)
+           |> assign(:streaming_session_id, nil)
+           |> assign(:streaming_status, nil)}
+
+        "timeout" ->
+          {:noreply,
+           socket
+           |> assign(:processing, false)
+           |> assign(:error, "Streaming connection timed out")
+           |> assign(:streaming_result, nil)
+           |> assign(:streaming_session_id, nil)
+           |> assign(:streaming_status, nil)}
+
+        _ ->
+          {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
     end
-
-    {:noreply,
-     socket
-     |> assign(:processing, false)
-     |> assign(:result, result)
-     |> assign(:history, history)}
   end
 
   @impl true
-  def handle_info({:process_complete, {:error, reason}}, socket) do
-    {:noreply,
-     socket
-     |> assign(:processing, false)
-     |> assign(:error, reason)}
+  def handle_event("streaming_chunk", %{"session_id" => session_id, "content" => content}, socket) do
+    Logger.debug("Streaming chunk received for session #{session_id}")
+
+    if socket.assigns.streaming_session_id == session_id do
+      # Update streaming result with new content chunk
+      streaming_result = socket.assigns.streaming_result
+
+      if streaming_result do
+        # Accumulate content in the streaming result
+        current_content = get_in(streaming_result, [:justification, :raw_markdown]) || ""
+        updated_content = current_content <> content
+
+        updated_result = put_in(streaming_result, [:justification, :raw_markdown], updated_content)
+
+        # Also update rendered HTML if available
+        case DecisionEngine.MarkdownRenderer.render_to_html(updated_content) do
+          {:ok, rendered_html} ->
+            updated_result = put_in(updated_result, [:justification, :rendered_html], rendered_html)
+            {:noreply, assign(socket, :streaming_result, updated_result)}
+
+          {:error, _reason} ->
+            # Fallback to raw content
+            updated_result = put_in(updated_result, [:justification, :rendered_html], Phoenix.HTML.html_escape(updated_content) |> Phoenix.HTML.safe_to_string())
+            {:noreply, assign(socket, :streaming_result, updated_result)}
+        end
+      else
+        {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
   end
+
+
 
   @impl true
   def handle_info({:process_streaming_started, {:ok, result}}, socket) do
@@ -294,19 +308,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     handle_info({:domain_changed, domain}, socket)
   end
 
-  defp process_scenario(scenario, assigns) do
-    config = build_config(assigns)
-    domain = assigns.domain
-    Logger.info("Processing scenario with domain: #{domain} (from assigns)")
 
-    case DecisionEngine.process(scenario, domain, config) do
-      {:ok, result} -> {:ok, result}
-      {:error, reason} -> {:error, reason}
-    end
-  end
 
   defp process_scenario_streaming(scenario, assigns, session_id) do
-    config = build_config(assigns)
+    # Use unified LLM configuration from LLMConfigManager
+    # Fall back to legacy config if unified config is not available
+    config = get_unified_or_legacy_config(assigns)
     domain = assigns.domain
     Logger.info("Processing scenario with streaming for domain: #{domain}, session: #{session_id}")
 
@@ -320,28 +327,44 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     :crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)
   end
 
-  defp build_config(assigns) do
-    case assigns.provider do
-      "openai" ->
-        DecisionEngine.ConfigBuilder.openai(assigns.api_key, model: assigns.model)
+  # Gets unified configuration from LLMConfigManager, falls back to legacy config if needed
+  defp get_unified_or_legacy_config(assigns) do
+    case DecisionEngine.LLMConfigManager.get_current_config() do
+      {:ok, config} ->
+        Logger.info("Using unified LLM configuration from LLMConfigManager")
+        config
 
-      "anthropic" ->
-        DecisionEngine.ConfigBuilder.anthropic(assigns.api_key, model: assigns.model)
-
-      "ollama" ->
-        DecisionEngine.ConfigBuilder.ollama(assigns.model)
-
-      "openrouter" ->
-        DecisionEngine.ConfigBuilder.openrouter(assigns.api_key, model: assigns.model)
-
-      "lm_studio" ->
-        DecisionEngine.ConfigBuilder.lm_studio(assigns.model)
+      {:error, reason} ->
+        Logger.info("Unified LLM config not available (#{inspect(reason)}), using legacy config from form")
+        build_legacy_config(assigns)
     end
+  end
+
+  # Legacy configuration builder for backward compatibility
+  defp build_legacy_config(_assigns) do
+    # Return a default configuration since LLM config is now managed centrally
+    DecisionEngine.ConfigBuilder.ollama("ministral-3:3b")
   end
 
   defp save_to_history(result) do
     # Use HistoryManager to save analysis
     DecisionEngine.HistoryManager.save_analysis(result)
+  end
+
+  defp get_streaming_content(streaming_result) do
+    case streaming_result do
+      %{justification: %{raw_markdown: content}} -> content
+      %{justification: %{"raw_markdown" => content}} -> content
+      _ -> ""
+    end
+  end
+
+  defp get_streaming_html(streaming_result) do
+    case streaming_result do
+      %{justification: %{rendered_html: html}} -> html
+      %{justification: %{"rendered_html" => html}} -> html
+      _ -> nil
+    end
   end
 
   @impl true
@@ -360,6 +383,16 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
           />
         </div>
         <div class="flex-none gap-2" role="menubar">
+          <.nav_link
+            navigate="/analyze"
+            class="btn btn-ghost btn-sm"
+            aria_current="page"
+            aria_label="Current page: Analyze scenarios"
+            role="menuitem"
+          >
+            <span class="hero-cpu-chip w-5 h-5" aria-hidden="true"></span>
+            Analyze
+          </.nav_link>
           <.nav_link
             navigate="/domains"
             class="btn btn-ghost btn-sm"
@@ -437,23 +470,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                         Clear
                       </button>
 
-                      <!-- Streaming Toggle -->
-                      <div class="form-control">
-                        <label class="label cursor-pointer gap-2" for="streaming-toggle">
-                          <span class="label-text text-sm">Stream response</span>
-                          <input
-                            id="streaming-toggle"
-                            type="checkbox"
-                            class="toggle toggle-primary toggle-sm"
-                            phx-hook="StreamingToggle"
-                            checked={@streaming_enabled}
-                            aria-describedby="streaming-help"
-                          />
-                        </label>
-                        <div id="streaming-help" class="sr-only">
-                          Enable to see the AI response as it's being generated in real-time
-                        </div>
-                      </div>
+
                     </div>
 
                     <button
@@ -464,11 +481,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                     >
                       <%= if @processing do %>
                         <span class="loading loading-spinner" aria-hidden="true"></span>
-                        <%= if @streaming_enabled do %>
-                          Streaming...
-                        <% else %>
-                          Processing...
-                        <% end %>
+                        Analyzing...
                       <% else %>
                         <span class="hero-cpu-chip w-5 h-5" aria-hidden="true"></span>
                         Analyze Scenario
@@ -518,10 +531,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                       </div>
                     <% end %>
                     <%= if @streaming_result && @processing do %>
-                      <div class="badge badge-info ml-2">
-                        <span class="loading loading-spinner loading-xs mr-1"></span>
-                        Streaming
-                      </div>
+                      <.streaming_indicator
+                        status={@streaming_status || :connecting}
+                        session_id={@streaming_session_id}
+                        show_text={false}
+                        class="ml-2"
+                      />
                     <% end %>
                   </h2>
 
@@ -580,17 +595,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                           data-streaming="true"
                           class="relative"
                         >
-                          <div class="streaming-progress hidden">
-                            <div class="flex items-center gap-2 mb-2">
-                              <span class="loading loading-spinner loading-sm"></span>
-                              <span class="text-sm text-base-content/60">Generating response...</span>
-                            </div>
-                          </div>
-                          <div class="streaming-justification text-base-content/80 prose prose-sm max-w-none min-h-[100px] p-4 bg-base-200 rounded-lg">
-                            <div class="flex items-center justify-center h-20">
-                              <span class="loading loading-spinner loading-lg"></span>
-                            </div>
-                          </div>
+                          <.streaming_content
+                            content={get_streaming_content(@streaming_result)}
+                            rendered_html={get_streaming_html(@streaming_result)}
+                            streaming_status={@streaming_status || :connecting}
+                            class="min-h-[100px]"
+                          />
                         </div>
                       <% else %>
                         <!-- Static Content -->
@@ -686,9 +696,12 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
                       <h3 class="font-medium text-sm mb-1">
                         <%= format_domain_name(@domain) %> Domain
                       </h3>
-                      <p class="text-xs text-base-content/70 leading-relaxed">
-                        <%= get_domain_description(@domain) %>
-                      </p>
+                      <div class="text-xs text-base-content/70 leading-relaxed">
+                        <DecisionEngineWeb.Components.Markdown.inline_markdown
+                          content={get_domain_description(@domain)}
+                          class="text-xs text-base-content/70"
+                        />
+                      </div>
                       <%= if is_description_missing?(@domain) do %>
                         <div class="mt-2 text-xs text-warning">
                           <span class="hero-exclamation-triangle w-4 h-4 inline"></span>
@@ -701,72 +714,7 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
               </div>
             </div>
 
-            <!-- LLM Configuration Card -->
-            <div class="card bg-base-100 shadow-xl">
-              <div class="card-body">
-                <h2 class="card-title">
-                  <span class="hero-adjustments-horizontal w-6 h-6"></span>
-                  LLM Configuration
-                </h2>
 
-                <form phx-change="update_provider">
-                  <div class="form-control">
-                    <label class="label">
-                      <span class="label-text">Provider</span>
-                    </label>
-                    <select
-                      class="select select-bordered"
-                      name="provider"
-                    >
-                      <option value="lm_studio" selected={@provider == "lm_studio"}>LM Studio (Local)</option>
-                      <option value="anthropic" selected={@provider == "anthropic"}>Anthropic Claude</option>
-                      <option value="openai" selected={@provider == "openai"}>OpenAI GPT</option>
-                      <option value="ollama" selected={@provider == "ollama"}>Ollama (Local)</option>
-                      <option value="openrouter" selected={@provider == "openrouter"}>OpenRouter</option>
-                    </select>
-                  </div>
-                </form>
-
-                <%= if @provider not in ["ollama", "lm_studio"] do %>
-                  <form phx-change="update_api_key">
-                    <div class="form-control">
-                      <label class="label">
-                        <span class="label-text">API Key</span>
-                      </label>
-                      <input
-                        type="password"
-                        class="input input-bordered"
-                        placeholder="sk-..."
-                        name="api_key"
-                        value={@api_key}
-                      />
-                    </div>
-                  </form>
-                <% end %>
-
-                <form phx-change="update_model">
-                  <div class="form-control">
-                    <label class="label">
-                      <span class="label-text">Model</span>
-                    </label>
-                    <input
-                      type="text"
-                      class="input input-bordered"
-                      placeholder="Model name"
-                      name="model"
-                      value={@model}
-                    />
-                  </div>
-                </form>
-
-                <div class="alert alert-info mt-4">
-                  <span class="hero-information-circle w-5 h-5"></span>
-                  <span class="text-xs">
-                    API keys are not stored. For production, use environment variables.
-                  </span>
-                </div>
-              </div>
-            </div>
 
             <!-- Info Card -->
             <div class="card bg-base-100 shadow-xl">
@@ -918,21 +866,5 @@ defmodule DecisionEngineWeb.DecisionLive.Index do
     end
   end
 
-  # Helper function to wait for SSE connection establishment
-  defp wait_for_sse_connection(session_id, retries, delay_ms) when retries > 0 do
-    case DecisionEngine.StreamManager.get_stream_status(session_id) do
-      {:ok, _status} ->
-        Logger.info("SSE connection confirmed for session #{session_id}")
-        :ok
-      {:error, :not_found} ->
-        Logger.debug("Waiting for SSE connection for session #{session_id}, retries left: #{retries}")
-        Process.sleep(delay_ms)
-        wait_for_sse_connection(session_id, retries - 1, delay_ms)
-    end
-  end
 
-  defp wait_for_sse_connection(session_id, 0, _delay_ms) do
-    Logger.warning("SSE connection not established for session #{session_id} after retries")
-    :timeout
-  end
 end

@@ -34,7 +34,7 @@ defmodule DecisionEngine do
 
       # Render markdown justification to HTML
       rendered_html = DecisionEngine.MarkdownRenderer.render_to_html!(justification)
-      
+
       result = %{
         domain: domain,
         signals: signals,
@@ -115,31 +115,34 @@ defmodule DecisionEngine do
          {:ok, signals} <- extract_domain_signals(scenario, config, domain, schema_module, rule_config),
          decision_result <- evaluate_domain_rules(signals, rule_config, domain) do
 
-      # Check if StreamManager is available for this session
+      # Ensure StreamManager is available for this session
       case DecisionEngine.StreamManager.get_stream_status(session_id) do
         {:ok, _status} ->
-          # StreamManager exists, initiate streaming
-          case DecisionEngine.StreamManager.stream_processing(session_id, signals, decision_result, config, domain) do
-            :ok ->
-              result = %{
-                domain: domain,
-                signals: signals,
-                decision: decision_result,
-                streaming: true,
-                session_id: session_id,
-                timestamp: DateTime.utc_now()
-              }
-
-              Logger.info("Streaming initiated for domain #{domain}, session #{session_id}")
-              {:ok, result}
-
-            {:error, stream_reason} ->
-              Logger.warning("Streaming failed for session #{session_id}: #{inspect(stream_reason)}, falling back to traditional processing")
-              fallback_to_traditional_processing(domain, config, signals, decision_result)
-          end
+          Logger.debug("StreamManager already exists for session #{session_id}")
 
         {:error, :not_found} ->
-          Logger.warning("StreamManager not found for session #{session_id}, falling back to traditional processing")
+          Logger.info("StreamManager not found for session #{session_id}, waiting for SSE connection...")
+          # Wait a bit for SSE connection to establish StreamManager
+          Process.sleep(1000)
+      end
+
+      # Try to initiate streaming
+      case DecisionEngine.StreamManager.stream_processing(session_id, signals, decision_result, config, domain) do
+        :ok ->
+          result = %{
+            domain: domain,
+            signals: signals,
+            decision: decision_result,
+            streaming: true,
+            session_id: session_id,
+            timestamp: DateTime.utc_now()
+          }
+
+          Logger.info("Streaming initiated for domain #{domain}, session #{session_id}")
+          {:ok, result}
+
+        {:error, stream_reason} ->
+          Logger.warning("Streaming failed for session #{session_id}: #{inspect(stream_reason)}, falling back to traditional processing")
           fallback_to_traditional_processing(domain, config, signals, decision_result)
       end
     else
@@ -171,7 +174,7 @@ defmodule DecisionEngine do
   defp validate_domain(domain) do
     # Use dynamic domain discovery instead of hardcoded list
     available_domains = DecisionEngine.DomainManager.list_available_domains()
-    
+
     if domain in available_domains do
       :ok
     else
@@ -184,7 +187,7 @@ defmodule DecisionEngine do
       {:ok, rule_config} ->
         Logger.debug("Successfully loaded configuration for domain #{domain}")
         {:ok, rule_config}
-      
+
       {:error, reason} ->
         Logger.error("Failed to load configuration for domain #{domain}: #{inspect(reason)}")
         {:error, {:configuration_load_failed, domain, reason}}
@@ -202,7 +205,7 @@ defmodule DecisionEngine do
       {:ok, signals} ->
         Logger.debug("Successfully extracted signals for domain #{domain}: #{inspect(Map.keys(signals))}")
         {:ok, signals}
-      
+
       {:error, reason} ->
         Logger.error("Signal extraction failed for domain #{domain}: #{inspect(reason)}")
         {:error, {:signal_extraction_failed, domain, reason}}
@@ -221,7 +224,7 @@ defmodule DecisionEngine do
       {:ok, justification} ->
         Logger.debug("Successfully generated justification for domain #{domain}")
         {:ok, justification}
-      
+
       {:error, reason} ->
         Logger.error("Justification generation failed for domain #{domain}: #{inspect(reason)}")
         {:error, {:justification_failed, domain, reason}}
@@ -230,23 +233,23 @@ defmodule DecisionEngine do
 
   defp format_domain_error(domain, reason) do
     domain_name = domain |> Atom.to_string() |> String.replace("_", " ") |> String.capitalize()
-    
+
     case reason do
       {:invalid_domain, invalid_domain, supported_domains} ->
         "Invalid domain '#{invalid_domain}'. Supported domains: #{inspect(supported_domains)}"
-      
+
       {:invalid_session_id, msg} ->
         "Invalid session ID: #{msg}"
-      
+
       {:configuration_load_failed, ^domain, config_reason} ->
         "Failed to load configuration for #{domain_name}: #{format_config_error(config_reason)}"
-      
+
       {:signal_extraction_failed, ^domain, extraction_reason} ->
         "Signal extraction failed for #{domain_name}: #{format_extraction_error(extraction_reason)}"
-      
+
       {:justification_failed, ^domain, justification_reason} ->
         "Justification generation failed for #{domain_name}: #{format_justification_error(justification_reason)}"
-      
+
       other ->
         "Processing failed for #{domain_name}: #{inspect(other)}"
     end
@@ -289,12 +292,12 @@ defmodule DecisionEngine do
   # Fallback mechanism when streaming is not available or fails
   defp fallback_to_traditional_processing(domain, config, signals, decision_result) do
     Logger.info("Falling back to traditional processing for domain #{domain}")
-    
+
     case generate_domain_justification(signals, decision_result, config, domain) do
       {:ok, justification} ->
         # Render markdown justification to HTML
         rendered_html = DecisionEngine.MarkdownRenderer.render_to_html!(justification)
-        
+
         result = %{
           domain: domain,
           signals: signals,
@@ -310,7 +313,7 @@ defmodule DecisionEngine do
 
         Logger.info("Fallback processing completed for domain #{domain}")
         {:ok, result}
-      
+
       {:error, reason} ->
         Logger.error("Fallback processing failed for domain #{domain}: #{inspect(reason)}")
         {:error, {:justification_failed, domain, reason}}
