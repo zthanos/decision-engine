@@ -13,7 +13,7 @@ defmodule DecisionEngineWeb.DecisionLive.Settings do
       streaming: true,
       temperature: 0.7,
       max_tokens: 2000,
-      timeout: 30000
+      timeout: 120000  # Increased to 2 minutes for local LLMs
     }
 
     # Load current configuration and merge with defaults
@@ -67,7 +67,7 @@ defmodule DecisionEngineWeb.DecisionLive.Settings do
       streaming: config_params["streaming"] == "true",
       temperature: parse_float(config_params["temperature"], 0.7),
       max_tokens: parse_integer(config_params["max_tokens"], 2000),
-      timeout: parse_integer(config_params["timeout"], 30) * 1000  # Convert seconds to milliseconds
+      timeout: parse_integer(config_params["timeout"], 120) * 1000  # Convert seconds to milliseconds, default 2 minutes
     }
 
     # If provider changed, update model and endpoint to defaults for that provider
@@ -491,10 +491,10 @@ defmodule DecisionEngineWeb.DecisionLive.Settings do
                       class="input input-bordered w-full"
                       value={div(@config.timeout, 1000)}
                       min="5"
-                      max="300"
+                      max="600"
                     />
                     <label class="label">
-                      <span class="label-text-alt">Request timeout in seconds (5-300)</span>
+                      <span class="label-text-alt">Request timeout in seconds (5-600, recommended: 120+ for local LLMs)</span>
                     </label>
                   </div>
                 </div>

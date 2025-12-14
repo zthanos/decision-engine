@@ -24,6 +24,14 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       |> assign(:pdf_upload_mode, false)
       |> assign(:pdf_processing, false)
       |> assign(:pdf_error, nil)
+      |> assign(:pdf_can_retry, false)
+      |> assign(:pdf_show_manual_option, false)
+      |> assign(:processing_step, nil)
+      |> assign(:processing_progress, 0)
+      |> assign(:processing_message, nil)
+      |> assign(:streaming_content, "")
+      |> assign(:processing_start_time, nil)
+      |> assign(:last_domain_name, nil)
       |> allow_upload(:pdf_file,
           accept: ~w(.pdf),
           max_entries: 1,
@@ -133,35 +141,45 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       schema_module: domain_params["schema_module"]
     }
 
-    case DomainManager.validate_domain_config(domain_config) do
-      :ok ->
-        result = case socket.assigns.form_mode do
-          :new -> DomainManager.create_domain(domain_config)
-          :edit -> DomainManager.update_domain(socket.assigns.selected_domain, domain_config)
+    # Use DomainConfigBuilder for enhanced validation before saving
+    case DecisionEngine.DomainConfigBuilder.validate_generated_config(domain_config) do
+      {:ok, validated_config} ->
+        # Use the validated config for domain manager validation
+        case DomainManager.validate_domain_config(validated_config) do
+          :ok ->
+            result = case socket.assigns.form_mode do
+              :new -> DomainManager.create_domain(validated_config)
+              :edit -> DomainManager.update_domain(socket.assigns.selected_domain, validated_config)
+            end
+
+            case result do
+              {:ok, _} ->
+                {:ok, domains} = DomainManager.list_domains()
+
+                socket =
+                  socket
+                  |> assign(:domains, domains)
+                  |> assign(:form_mode, :list)
+                  |> assign(:errors, [])
+                  |> put_flash(:info, "Domain saved successfully with enhanced validation")
+
+                {:noreply, socket}
+
+              {:error, :domain_already_exists} ->
+                {:noreply, assign(socket, :errors, ["Domain name already exists"])}
+
+              {:error, _reason} ->
+                {:noreply, assign(socket, :errors, ["Failed to save domain configuration"])}
+            end
+
+          {:error, errors} ->
+            {:noreply, assign(socket, :errors, errors)}
         end
 
-        case result do
-          {:ok, _} ->
-            {:ok, domains} = DomainManager.list_domains()
-
-            socket =
-              socket
-              |> assign(:domains, domains)
-              |> assign(:form_mode, :list)
-              |> assign(:errors, [])
-              |> put_flash(:info, "Domain saved successfully")
-
-            {:noreply, socket}
-
-          {:error, :domain_already_exists} ->
-            {:noreply, assign(socket, :errors, ["Domain name already exists"])}
-
-          {:error, _reason} ->
-            {:noreply, assign(socket, :errors, ["Failed to save domain configuration"])}
-        end
-
-      {:error, errors} ->
-        {:noreply, assign(socket, :errors, errors)}
+      {:error, validation_errors} ->
+        # Show enhanced validation errors from DomainConfigBuilder
+        enhanced_errors = validation_errors ++ ["Configuration validation failed. Please review the fields above."]
+        {:noreply, assign(socket, :errors, enhanced_errors)}
     end
   end
 
@@ -298,27 +316,163 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       socket
       |> assign(:pdf_upload_mode, !socket.assigns.pdf_upload_mode)
       |> assign(:pdf_error, nil)
+      |> clear_all_uploads(:pdf_file)  # Clear any existing uploads when toggling
     {:noreply, socket}
   end
 
   @impl true
   def handle_event("process_pdf", %{"domain_name" => domain_name}, socket) do
-    case uploaded_entries(socket, :pdf_file) do
+    # Validate domain name first
+    if String.trim(domain_name) == "" do
+      socket = assign(socket, :pdf_error, "Please enter a domain name")
+      {:noreply, socket}
+    else
+      entries = uploaded_entries(socket, :pdf_file)
+      Logger.info("PDF processing requested. Entries: #{inspect(entries, pretty: true)}")
+
+      # Handle the tuple format returned by uploaded_entries: {entries, errors}
+      valid_entries = case entries do
+        {list, _errors} when is_list(list) -> list
+        list when is_list(list) -> list
+        _ -> []
+      end
+
+      case valid_entries do
+        [entry] ->
+          Logger.info("Processing single PDF entry: #{inspect(entry.client_name)}")
+          # Set processing state with enhanced tracking
+          socket =
+            socket
+            |> assign(:pdf_processing, true)
+            |> assign(:pdf_error, nil)
+            |> assign(:processing_step, "Preparing to process PDF")
+            |> assign(:processing_progress, 0)
+            |> assign(:processing_message, "Getting ready to analyze your document...")
+            |> assign(:streaming_content, "")
+            |> assign(:processing_start_time, System.system_time(:second))
+            |> assign(:last_domain_name, domain_name)  # Store for retry functionality
+
+          # Start async PDF processing with streaming and enhanced integration
+          pid = self()
+          Task.start(fn ->
+            consume_uploaded_entry(socket, entry, fn %{path: path} ->
+              # Validate content before processing
+              case File.read(path) do
+                {:ok, _content} ->
+                  case DecisionEngine.PDFProcessor.process_pdf_for_domain_streaming(path, domain_name, pid) do
+                    {:ok, raw_domain_config} ->
+                      # Use DomainConfigBuilder to validate and enhance the configuration
+                      case DecisionEngine.DomainConfigBuilder.build_from_llm_response(
+                        raw_domain_config,
+                        domain_name,
+                        [source_file: entry.client_name, llm_model: "pdf_processor"]
+                      ) do
+                        {:ok, validated_config} ->
+                          send(pid, {:pdf_processed, validated_config})
+                          {:ok, :processed}
+                        {:error, validation_errors} ->
+                          Logger.warning("Domain config validation failed: #{inspect(validation_errors)}")
+                          # Still send the raw config but with validation warnings
+                          send(pid, {:pdf_processed_with_warnings, raw_domain_config, validation_errors})
+                          {:ok, :processed_with_warnings}
+                      end
+                    {:error, reason} ->
+                      send(pid, {:pdf_processing_failed, reason})
+                      {:ok, :failed}
+                  end
+                {:error, reason} ->
+                  send(pid, {:pdf_processing_failed, "Cannot read PDF file: #{inspect(reason)}"})
+                  {:ok, :failed}
+              end
+            end)
+          end)
+
+          {:noreply, socket}
+
+        [] ->
+          socket = assign(socket, :pdf_error, "Please select a PDF file to upload")
+          {:noreply, socket}
+
+        multiple when length(multiple) > 1 ->
+          Logger.warning("Multiple upload entries detected: #{length(multiple)} files. Clearing all uploads.")
+          socket =
+            socket
+            |> clear_all_uploads(:pdf_file)  # Clear all entries
+            |> assign(:pdf_error, "Multiple files detected. Please upload only one PDF file at a time.")
+          {:noreply, socket}
+      end
+    end
+  end
+
+  @impl true
+  def handle_event("validate_pdf", _params, socket) do
+    # Handle file validation during upload
+    entries = uploaded_entries(socket, :pdf_file)
+    Logger.info("PDF validation: #{inspect(entries)}")
+
+    # Extract entries from tuple format
+    entry_list = case entries do
+      {list, _errors} when is_list(list) -> list
+      list when is_list(list) -> list
+      _ -> []
+    end
+
+    # Clear any previous errors when a new file is uploaded
+    socket = assign(socket, :pdf_error, nil)
+    Logger.info("PDF validation: found #{length(entry_list)} entries")
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("retry_pdf_processing", _params, socket) do
+    # Clear error and restart processing with the same uploaded file using enhanced retry logic
+    entries = uploaded_entries(socket, :pdf_file)
+
+    # Extract entries from tuple format
+    entry_list = case entries do
+      {list, _errors} when is_list(list) -> list
+      list when is_list(list) -> list
+      _ -> []
+    end
+
+    case entry_list do
       [entry] ->
-        # Set processing state
+        # Get the domain name from the form (we'll need to store it)
+        domain_name = socket.assigns[:last_domain_name] || "Retried Domain"
+
         socket =
           socket
-          |> assign(:pdf_processing, true)
           |> assign(:pdf_error, nil)
+          |> assign(:pdf_can_retry, false)
+          |> assign(:pdf_show_manual_option, false)
+          |> assign(:pdf_processing, true)
+          |> assign(:processing_step, "Retrying PDF processing with enhanced error handling")
+          |> assign(:processing_progress, 0)
+          |> assign(:processing_message, "Attempting recovery with improved processing methods...")
+          |> assign(:streaming_content, "")
+          |> assign(:processing_start_time, System.system_time(:second))
 
-        # Start async PDF processing
+        # Start async PDF processing with enhanced retry logic and validation
         pid = self()
         Task.start(fn ->
           consume_uploaded_entry(socket, entry, fn %{path: path} ->
-            case DecisionEngine.PDFProcessor.process_pdf_for_domain(path, domain_name) do
-              {:ok, domain_config} ->
-                send(pid, {:pdf_processed, domain_config})
-                {:ok, :processed}
+            # Use the enhanced processing method with retry logic
+            case DecisionEngine.PDFProcessor.process_pdf_for_domain_streaming(path, domain_name, pid) do
+              {:ok, raw_domain_config} ->
+                # Use DomainConfigBuilder for validation and enhancement
+                case DecisionEngine.DomainConfigBuilder.build_from_llm_response(
+                  raw_domain_config,
+                  domain_name,
+                  [source_file: "retry_#{entry.client_name}", llm_model: "pdf_processor_retry"]
+                ) do
+                  {:ok, validated_config} ->
+                    send(pid, {:pdf_processed, validated_config})
+                    {:ok, :processed}
+                  {:error, validation_errors} ->
+                    Logger.warning("Retry: Domain config validation failed: #{inspect(validation_errors)}")
+                    send(pid, {:pdf_processed_with_warnings, raw_domain_config, validation_errors})
+                    {:ok, :processed_with_warnings}
+                end
               {:error, reason} ->
                 send(pid, {:pdf_processing_failed, reason})
                 {:ok, :failed}
@@ -329,29 +483,144 @@ defmodule DecisionEngineWeb.DomainManagementLive do
         {:noreply, socket}
 
       [] ->
-        socket = assign(socket, :pdf_error, "Please select a PDF file to upload")
+        socket =
+          socket
+          |> assign(:pdf_error, "No file available for retry. Please upload a new file.")
+          |> assign(:pdf_can_retry, false)
         {:noreply, socket}
 
-      _multiple ->
-        socket = assign(socket, :pdf_error, "Please select only one PDF file")
+      other ->
+        Logger.warning("Unexpected upload entries format during retry: #{inspect(other)}")
+        socket =
+          socket
+          |> assign(:pdf_error, "Upload system error during retry. Please upload a new file.")
+          |> assign(:pdf_can_retry, false)
         {:noreply, socket}
     end
   end
 
   @impl true
-  def handle_event("validate_pdf", _params, socket) do
-    # Handle file validation during upload
+  def handle_event("create_manual_domain", _params, socket) do
+    # Switch to manual domain creation mode when PDF processing fails
+    domain_name = socket.assigns[:last_domain_name] || "New Domain"
+
+    # Use DomainConfigBuilder to create a basic configuration
+    # Note: handle_unclear_content always returns {:ok, config} according to its implementation
+    {:ok, basic_config} = DecisionEngine.DomainConfigBuilder.handle_unclear_content(%{}, domain_name, [])
+    form_data = convert_domain_config_to_form_data(basic_config)
+
+    socket =
+      socket
+      |> assign(:form_mode, :new)
+      |> assign(:form_data, form_data)
+      |> assign(:errors, [])
+      |> assign(:pdf_upload_mode, false)
+      |> assign(:pdf_processing, false)
+      |> assign(:pdf_error, nil)
+      |> assign(:pdf_can_retry, false)
+      |> assign(:pdf_show_manual_option, false)
+      |> reset_processing_state()
+      |> put_flash(:info, "Switched to manual domain creation. A basic configuration has been generated for you to customize.")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("dismiss_pdf_error", _params, socket) do
+    # Dismiss the PDF error and return to normal state
+    socket =
+      socket
+      |> assign(:pdf_error, nil)
+      |> assign(:pdf_can_retry, false)
+      |> assign(:pdf_show_manual_option, false)
+      |> clear_all_uploads(:pdf_file)  # Clear all upload entries
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("cancel-upload", %{"ref" => ref}, socket) do
+    # Cancel the specific upload entry by reference, handle gracefully if ref doesn't exist
+    try do
+      socket = cancel_upload(socket, :pdf_file, ref)
+      {:noreply, socket}
+    rescue
+      ArgumentError ->
+        # File reference doesn't exist, ignore gracefully
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("cancel-upload", _params, socket) do
+    # Handle case where ref is missing - gracefully ignore
     {:noreply, socket}
   end
 
   @impl true
   def handle_event("cancel_pdf_upload", _params, socket) do
-    socket =
+    # If processing is active, show cancellation feedback
+    if socket.assigns.pdf_processing do
+      socket =
+        socket
+        |> assign(:processing_step, "Cancelling processing")
+        |> assign(:processing_message, "Stopping AI analysis and cleaning up...")
+        |> assign(:processing_progress, 0)
+
+      # Delay the actual cancellation to show feedback
+      Process.send_after(self(), :complete_cancellation, 1000)
+      {:noreply, socket}
+    else
+      # Immediate cancellation if not processing
+      socket =
+        socket
+        |> assign(:pdf_upload_mode, false)
+        |> assign(:pdf_processing, false)
+        |> assign(:pdf_error, nil)
+        |> clear_all_uploads(:pdf_file)  # Clear all upload entries
+        |> reset_processing_state()
+      {:noreply, socket}
+    end
+  end
+
+  defp reset_processing_state(socket) do
+    socket
+    |> assign(:processing_step, nil)
+    |> assign(:processing_progress, 0)
+    |> assign(:processing_message, nil)
+    |> assign(:streaming_content, "")
+    |> assign(:processing_start_time, nil)
+  end
+
+  defp clear_all_uploads(socket, upload_key) do
+    # Cancel all upload entries for the given key
+    # Handle case where uploaded_entries might return a tuple or list
+    entries = uploaded_entries(socket, upload_key)
+    Logger.info("clear_all_uploads: entries = #{inspect(entries)}")
+
+    # Extract the actual entries list from the tuple format
+    entry_list = case entries do
+      {list, _errors} when is_list(list) -> list
+      list when is_list(list) -> list
+      _ -> []
+    end
+
+    if length(entry_list) > 0 do
+      Logger.info("Clearing #{length(entry_list)} upload entries")
+      Enum.reduce(entry_list, socket, fn entry, acc_socket ->
+        try do
+          Logger.info("Cancelling upload entry: #{inspect(entry.ref)}")
+          cancel_upload(acc_socket, upload_key, entry.ref)
+        rescue
+          error ->
+            Logger.warning("Failed to cancel upload entry #{entry.ref}: #{inspect(error)}")
+            acc_socket
+        end
+      end)
+    else
+      Logger.info("No upload entries to clear")
       socket
-      |> assign(:pdf_upload_mode, false)
-      |> assign(:pdf_processing, false)
-      |> assign(:pdf_error, nil)
-    {:noreply, socket}
+    end
   end
 
   defp default_pattern do
@@ -384,6 +653,20 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   end
 
   defp parse_patterns(_), do: []
+
+  @impl true
+  def handle_info(:complete_cancellation, socket) do
+    socket =
+      socket
+      |> assign(:pdf_upload_mode, false)
+      |> assign(:pdf_processing, false)
+      |> assign(:pdf_error, nil)
+      |> clear_all_uploads(:pdf_file)  # Clear all upload entries
+      |> reset_processing_state()
+      |> put_flash(:info, "PDF processing cancelled successfully")
+
+    {:noreply, socket}
+  end
 
   @impl true
   def handle_info({:description_generated, domain_atom, _description}, socket) do
@@ -420,18 +703,190 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   end
 
   @impl true
+  def handle_info({:processing_step, step_name, progress}, socket) do
+    Logger.debug("PDF processing step: #{step_name} (#{progress}%)")
+
+    socket =
+      socket
+      |> assign(:processing_step, step_name)
+      |> assign(:processing_progress, progress)
+      |> assign(:processing_message, nil)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:processing_step, step_name, progress, message}, socket) do
+    Logger.debug("PDF processing step: #{step_name} (#{progress}%) - #{message}")
+
+    socket =
+      socket
+      |> assign(:processing_step, step_name)
+      |> assign(:processing_progress, progress)
+      |> assign(:processing_message, message)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:content_chunk, chunk}, socket) do
+    Logger.debug("Received content chunk: #{String.slice(chunk, 0, 50)}...")
+
+    # Accumulate streaming content for real-time display
+    current_content = socket.assigns[:streaming_content] || ""
+    updated_content = current_content <> chunk
+
+    socket = assign(socket, :streaming_content, updated_content)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:validation_step, step_name, progress}, socket) do
+    Logger.debug("Domain validation step: #{step_name} (#{progress}%)")
+
+    socket =
+      socket
+      |> assign(:processing_step, step_name)
+      |> assign(:processing_progress, progress)
+      |> assign(:processing_message, "Ensuring configuration quality and completeness...")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:config_enhancement, enhancement_type, progress}, socket) do
+    Logger.debug("Configuration enhancement: #{enhancement_type} (#{progress}%)")
+
+    message = case enhancement_type do
+      :applying_defaults -> "Applying intelligent defaults to configuration..."
+      :validating_patterns -> "Validating decision patterns and rules..."
+      :normalizing_fields -> "Normalizing signal fields and structure..."
+      :calculating_confidence -> "Calculating configuration confidence score..."
+      _ -> "Enhancing configuration quality..."
+    end
+
+    socket =
+      socket
+      |> assign(:processing_step, "Enhancing configuration")
+      |> assign(:processing_progress, progress)
+      |> assign(:processing_message, message)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:processing_complete, domain_config}, socket) do
+    Logger.info("PDF processing completed successfully")
+
+    # Calculate processing time
+    start_time = socket.assigns[:processing_start_time] || System.system_time(:second)
+    processing_time = System.system_time(:second) - start_time
+
+    socket =
+      socket
+      |> assign(:processing_step, "Validating configuration")
+      |> assign(:processing_progress, 95)
+      |> assign(:processing_message, "Validating and finalizing domain configuration...")
+
+    # Validate the configuration before final processing
+    case DecisionEngine.DomainConfigBuilder.validate_generated_config(domain_config) do
+      {:ok, _} ->
+        socket =
+          socket
+          |> assign(:processing_step, "Processing complete")
+          |> assign(:processing_progress, 100)
+          |> assign(:processing_message, "Successfully generated domain configuration in #{processing_time} seconds!")
+
+        # Small delay to show completion before transitioning
+        Process.send_after(self(), {:pdf_processed, domain_config}, 1500)
+        {:noreply, socket}
+
+      {:error, validation_errors} ->
+        socket =
+          socket
+          |> assign(:processing_step, "Processing complete with warnings")
+          |> assign(:processing_progress, 100)
+          |> assign(:processing_message, "Generated domain configuration with validation warnings in #{processing_time} seconds")
+
+        # Send with warnings
+        Process.send_after(self(), {:pdf_processed_with_warnings, domain_config, validation_errors}, 1500)
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_info({:processing_error, reason}, socket) do
+    Logger.error("PDF processing error: #{inspect(reason)}")
+
+    # Show error state briefly before transitioning
+    socket =
+      socket
+      |> assign(:processing_step, "Processing failed")
+      |> assign(:processing_message, "An error occurred during processing...")
+
+    # Forward to the existing error handler after a brief delay
+    Process.send_after(self(), {:pdf_processing_failed, reason}, 1000)
+
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_info({:pdf_processed, domain_config}, socket) do
     Logger.info("PDF processed successfully, generated domain: #{domain_config.name}")
+
+    # Calculate total processing time
+    start_time = socket.assigns[:processing_start_time] || System.system_time(:second)
+    total_time = System.system_time(:second) - start_time
+
+    # Convert domain config to form data format for proper form population
+    form_data = convert_domain_config_to_form_data(domain_config)
 
     # Switch to edit mode with the generated configuration
     socket =
       socket
       |> assign(:form_mode, :new)
-      |> assign(:form_data, domain_config)
+      |> assign(:form_data, form_data)
       |> assign(:pdf_processing, false)
       |> assign(:pdf_upload_mode, false)
+      |> assign(:processing_step, nil)
+      |> assign(:processing_progress, 0)
+      |> assign(:processing_message, nil)
+      |> assign(:streaming_content, "")
+      |> assign(:processing_start_time, nil)
       |> assign(:errors, [])
-      |> put_flash(:info, "Domain configuration generated from PDF successfully!")
+      |> clear_all_uploads(:pdf_file)  # Clear all upload entries
+      |> put_flash(:info, "🎉 Domain configuration generated successfully in #{total_time} seconds! Review and save your new domain below.")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:pdf_processed_with_warnings, domain_config, validation_errors}, socket) do
+    Logger.info("PDF processed with validation warnings for domain: #{domain_config.name || "unknown"}")
+
+    # Calculate total processing time
+    start_time = socket.assigns[:processing_start_time] || System.system_time(:second)
+    total_time = System.system_time(:second) - start_time
+
+    # Convert domain config to form data format for proper form population
+    form_data = convert_domain_config_to_form_data(domain_config)
+
+    # Switch to edit mode with the generated configuration and show warnings
+    socket =
+      socket
+      |> assign(:form_mode, :new)
+      |> assign(:form_data, form_data)
+      |> assign(:pdf_processing, false)
+      |> assign(:pdf_upload_mode, false)
+      |> assign(:processing_step, nil)
+      |> assign(:processing_progress, 0)
+      |> assign(:processing_message, nil)
+      |> assign(:streaming_content, "")
+      |> assign(:processing_start_time, nil)
+      |> assign(:errors, validation_errors)
+      |> clear_all_uploads(:pdf_file)  # Clear all upload entries
+      |> put_flash(:warning, "⚠️ Domain configuration generated in #{total_time} seconds with validation warnings. Please review and correct the issues below before saving.")
 
     {:noreply, socket}
   end
@@ -440,16 +895,37 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   def handle_info({:pdf_processing_failed, reason}, socket) do
     Logger.error("PDF processing failed: #{inspect(reason)}")
 
-    error_message = case reason do
-      :no_api_key_configured -> "LLM API key not configured. Please configure LLM settings first."
-      {:llm_call_failed, _} -> "Failed to connect to LLM service. Please check your configuration."
-      _ -> "Failed to process PDF. Please ensure the file is valid and try again."
+    # Use enhanced error messages from PDFProcessor
+    error_message = DecisionEngine.PDFProcessor.enhance_error_message(reason)
+
+    # Determine if retry is possible
+    can_retry = case DecisionEngine.PDFProcessor.should_retry_error?(reason) do
+      {:retry, _delay} -> true
+      :no_retry -> false
+    end
+
+    # Determine if manual fallback is available
+    show_manual_option = case reason do
+      :no_api_key_configured -> true
+      :no_llm_config_available -> true
+      {:llm_call_failed, _} -> true
+      "PDF text extraction requires" <> _ -> false
+      "File does not exist" <> _ -> false
+      _ -> true
     end
 
     socket =
       socket
       |> assign(:pdf_processing, false)
+      |> assign(:processing_step, nil)
+      |> assign(:processing_progress, 0)
+      |> assign(:processing_message, nil)
+      |> assign(:streaming_content, "")
+      |> assign(:processing_start_time, nil)
       |> assign(:pdf_error, error_message)
+      |> assign(:pdf_can_retry, can_retry)
+      |> assign(:pdf_show_manual_option, show_manual_option)
+      |> clear_all_uploads(:pdf_file)  # Clear all upload entries
 
     {:noreply, socket}
   end
@@ -473,6 +949,52 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   defp error_to_string(:not_accepted), do: "File type not accepted (PDF only)"
   defp error_to_string(:too_many_files), do: "Too many files (max 1)"
   defp error_to_string(error), do: "Upload error: #{inspect(error)}"
+
+  defp convert_domain_config_to_form_data(domain_config) do
+    %{
+      name: domain_config.name || "",
+      display_name: domain_config.display_name || "",
+      description: domain_config.description || "",
+      signals_fields: domain_config.signals_fields || [""],
+      patterns: convert_patterns_to_form_format(domain_config.patterns || []),
+      schema_module: domain_config.schema_module || ""
+    }
+  end
+
+  defp convert_patterns_to_form_format(patterns) when is_list(patterns) do
+    patterns
+    |> Enum.map(&convert_single_pattern_to_form_format/1)
+    |> ensure_minimum_patterns()
+  end
+
+  defp convert_patterns_to_form_format(_), do: [default_pattern()]
+
+  defp convert_single_pattern_to_form_format(pattern) when is_map(pattern) do
+    %{
+      "id" => pattern["id"] || pattern[:id] || "",
+      "outcome" => pattern["outcome"] || pattern[:outcome] || "",
+      "score" => normalize_pattern_score(pattern["score"] || pattern[:score] || 0.5),
+      "summary" => pattern["summary"] || pattern[:summary] || "",
+      "use_when" => pattern["use_when"] || pattern[:use_when] || [],
+      "avoid_when" => pattern["avoid_when"] || pattern[:avoid_when] || [],
+      "typical_use_cases" => pattern["typical_use_cases"] || pattern[:typical_use_cases] || []
+    }
+  end
+
+  defp convert_single_pattern_to_form_format(_), do: default_pattern()
+
+  defp normalize_pattern_score(score) when is_number(score) do
+    cond do
+      score < 0.0 -> 0.0
+      score > 1.0 -> 1.0
+      true -> score
+    end
+  end
+
+  defp normalize_pattern_score(_), do: 0.5
+
+  defp ensure_minimum_patterns([]), do: [default_pattern()]
+  defp ensure_minimum_patterns(patterns), do: patterns
 
 
 
@@ -591,11 +1113,191 @@ defmodule DecisionEngineWeb.DomainManagementLive do
                   </p>
 
                   <%= if @pdf_processing do %>
-                    <div class="flex items-center justify-center py-8">
-                      <div class="text-center">
-                        <span class="loading loading-spinner loading-lg text-secondary"></span>
-                        <p class="mt-2 text-base-content/60">Processing PDF and generating domain...</p>
-                        <p class="text-xs text-base-content/50">This may take a few moments</p>
+                    <div class="space-y-4 py-6">
+                      <!-- Progress Header -->
+                      <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-3">
+                          <span class="loading loading-spinner loading-md text-secondary"></span>
+                          <div class="flex-1">
+                            <h3 class="font-semibold text-base-content">Processing PDF</h3>
+                            <p class="text-sm text-base-content/60">
+                              <%= @processing_step || "Initializing..." %>
+                            </p>
+                            <%= if @processing_message do %>
+                              <p class="text-xs text-base-content/50 mt-1 italic">
+                                <%= @processing_message %>
+                              </p>
+                            <% end %>
+                          </div>
+                        </div>
+                        <div class="text-right">
+                          <div class="text-lg font-bold text-secondary">
+                            <%= @processing_progress || 0 %>%
+                          </div>
+                          <%= if @processing_start_time do %>
+                            <div class="text-xs text-base-content/50">
+                              <%= System.system_time(:second) - @processing_start_time %>s elapsed
+                            </div>
+                          <% end %>
+                        </div>
+                      </div>
+
+                      <!-- Enhanced Progress Bar -->
+                      <div class="w-full space-y-2">
+                        <progress
+                          class="progress progress-secondary w-full h-4"
+                          value={@processing_progress || 0}
+                          max="100"
+                        ></progress>
+                        <div class="flex justify-between text-xs text-base-content/50">
+                          <span>Processing...</span>
+                          <span>
+                            <%= cond do %>
+                              <% @processing_progress < 30 -> %>
+                                Reading document
+                              <% @processing_progress < 60 -> %>
+                                Analyzing content
+                              <% @processing_progress < 90 -> %>
+                                Generating domain
+                              <% true -> %>
+                                Finalizing
+                            <% end %>
+                          </span>
+                        </div>
+                      </div>
+
+                      <!-- Enhanced Streaming Content Preview -->
+                      <%= if @streaming_content && String.trim(@streaming_content) != "" do %>
+                        <div class="bg-gradient-to-r from-info/10 to-secondary/10 rounded-lg p-4 border border-info/20">
+                          <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                              <span class="hero-sparkles w-4 h-4 text-info animate-pulse"></span>
+                              <span class="text-sm font-semibold text-info">AI Analysis in Progress</span>
+                            </div>
+                            <div class="text-xs text-base-content/50">
+                              <%= String.length(@streaming_content) %> characters generated
+                            </div>
+                          </div>
+                          <div class="bg-base-100/80 rounded p-3 max-h-40 overflow-y-auto">
+                            <div class="text-xs text-base-content/80 font-mono leading-relaxed">
+                              <%= String.slice(@streaming_content, 0, 800) %>
+                              <%= if String.length(@streaming_content) > 800 do %>
+                                <span class="text-base-content/50">... (content continues)</span>
+                              <% end %>
+                              <%= if @processing_progress < 85 do %>
+                                <span class="inline-block w-2 h-4 bg-secondary animate-pulse ml-1"></span>
+                              <% end %>
+                            </div>
+                          </div>
+                          <div class="text-xs text-info/70 mt-2 italic">
+                            The AI is analyzing your document and generating domain configuration...
+                          </div>
+                        </div>
+                      <% end %>
+
+                      <!-- Enhanced Processing Steps -->
+                      <div class="bg-base-200/30 rounded-lg p-4 border border-base-300">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                          <div class={"step transition-all duration-300 #{if @processing_progress >= 30, do: "text-secondary font-semibold", else: "text-base-content/40"}"}>
+                            <div class="flex items-center gap-2 p-2 rounded">
+                              <%= if @processing_progress >= 30 do %>
+                                <span class="hero-check-circle w-4 h-4 text-success"></span>
+                              <% else %>
+                                <%= if @processing_progress >= 5 do %>
+                                  <span class="loading loading-spinner loading-xs text-secondary"></span>
+                                <% else %>
+                                  <span class="hero-clock w-4 h-4"></span>
+                                <% end %>
+                              <% end %>
+                              <div>
+                                <div class="font-medium">Extract Text</div>
+                                <div class="text-xs opacity-70">Reading PDF content</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class={"step transition-all duration-300 #{if @processing_progress >= 60, do: "text-secondary font-semibold", else: "text-base-content/40"}"}>
+                            <div class="flex items-center gap-2 p-2 rounded">
+                              <%= if @processing_progress >= 60 do %>
+                                <span class="hero-check-circle w-4 h-4 text-success"></span>
+                              <% else %>
+                                <%= if @processing_progress >= 30 do %>
+                                  <span class="loading loading-spinner loading-xs text-secondary"></span>
+                                <% else %>
+                                  <span class="hero-clock w-4 h-4"></span>
+                                <% end %>
+                              <% end %>
+                              <div>
+                                <div class="font-medium">Analyze Content</div>
+                                <div class="text-xs opacity-70">Understanding structure</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class={"step transition-all duration-300 #{if @processing_progress >= 85, do: "text-secondary font-semibold", else: "text-base-content/40"}"}>
+                            <div class="flex items-center gap-2 p-2 rounded">
+                              <%= if @processing_progress >= 85 do %>
+                                <span class="hero-check-circle w-4 h-4 text-success"></span>
+                              <% else %>
+                                <%= if @processing_progress >= 60 do %>
+                                  <span class="loading loading-spinner loading-xs text-secondary"></span>
+                                <% else %>
+                                  <span class="hero-clock w-4 h-4"></span>
+                                <% end %>
+                              <% end %>
+                              <div>
+                                <div class="font-medium">Generate Domain</div>
+                                <div class="text-xs opacity-70">Creating patterns</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class={"step transition-all duration-300 #{if @processing_progress >= 100, do: "text-success font-semibold", else: "text-base-content/40"}"}>
+                            <div class="flex items-center gap-2 p-2 rounded">
+                              <%= if @processing_progress >= 100 do %>
+                                <span class="hero-check-circle w-4 h-4 text-success"></span>
+                              <% else %>
+                                <%= if @processing_progress >= 85 do %>
+                                  <span class="loading loading-spinner loading-xs text-secondary"></span>
+                                <% else %>
+                                  <span class="hero-clock w-4 h-4"></span>
+                                <% end %>
+                              <% end %>
+                              <div>
+                                <div class="font-medium">Complete</div>
+                                <div class="text-xs opacity-70">Ready to review</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- Enhanced Cancel and Retry Options -->
+                      <div class="flex justify-between items-center pt-4 border-t border-base-200">
+                        <div class="text-xs text-base-content/50">
+                          <%= if @processing_progress < 50 do %>
+                            Processing typically takes 30-60 seconds for most documents
+                          <% else %>
+                            Almost done! The AI is finalizing your domain configuration
+                          <% end %>
+                        </div>
+                        <div class="flex gap-2">
+                          <%= if @processing_progress > 80 do %>
+                            <div class="text-xs text-success flex items-center gap-1">
+                              <span class="hero-check-circle w-3 h-3"></span>
+                              Nearly complete!
+                            </div>
+                          <% else %>
+                            <button
+                              type="button"
+                              phx-click="cancel_pdf_upload"
+                              class="btn btn-ghost btn-sm text-error"
+                            >
+                              <span class="hero-x-mark w-4 h-4"></span>
+                              Cancel Processing
+                            </button>
+                          <% end %>
+                        </div>
                       </div>
                     </div>
                   <% else %>
@@ -711,13 +1413,84 @@ defmodule DecisionEngineWeb.DomainManagementLive do
                     </form>
                   <% end %>
 
-                  <!-- PDF Processing Error -->
+                  <!-- Enhanced PDF Processing Error -->
                   <%= if @pdf_error do %>
-                    <div class="alert alert-error mt-4">
-                      <span class="hero-exclamation-triangle w-6 h-6"></span>
-                      <div>
-                        <h3 class="font-bold">PDF Processing Failed</h3>
-                        <p class="text-sm"><%= @pdf_error %></p>
+                    <div class="alert alert-error mt-4 shadow-lg">
+                      <span class="hero-exclamation-triangle w-6 h-6 flex-shrink-0"></span>
+                      <div class="flex-1">
+                        <h3 class="font-bold text-lg">PDF Processing Failed</h3>
+                        <p class="text-sm mb-3"><%= @pdf_error %></p>
+
+                        <div class="flex flex-wrap gap-2">
+                          <%= if @pdf_can_retry do %>
+                            <button
+                              type="button"
+                              phx-click="retry_pdf_processing"
+                              class="btn btn-sm btn-outline btn-error"
+                            >
+                              <span class="hero-arrow-path w-4 h-4"></span>
+                              Try Again
+                            </button>
+                          <% end %>
+
+                          <%= if @pdf_show_manual_option do %>
+                            <button
+                              type="button"
+                              phx-click="create_manual_domain"
+                              class="btn btn-sm btn-outline btn-primary"
+                            >
+                              <span class="hero-pencil-square w-4 h-4"></span>
+                              Create Manually
+                            </button>
+                          <% end %>
+
+                          <button
+                            type="button"
+                            phx-click="dismiss_pdf_error"
+                            class="btn btn-sm btn-ghost"
+                          >
+                            <span class="hero-x-mark w-4 h-4"></span>
+                            Dismiss
+                          </button>
+
+                          <button
+                            type="button"
+                            phx-click="cancel_pdf_upload"
+                            class="btn btn-sm btn-ghost"
+                          >
+                            Cancel Upload
+                          </button>
+                        </div>
+
+                        <!-- Additional help text for specific error types -->
+                        <%= cond do %>
+                          <% String.contains?(@pdf_error, "API key") -> %>
+                            <div class="mt-3 p-3 bg-base-200 rounded-lg">
+                              <p class="text-xs text-base-content/70">
+                                <strong>Need help?</strong> Configure your LLM API key in the Settings page to enable automatic domain generation from PDFs.
+                              </p>
+                            </div>
+                          <% String.contains?(@pdf_error, "pdftotext") or String.contains?(@pdf_error, "poppler-utils") -> %>
+                            <div class="mt-3 p-3 bg-base-200 rounded-lg">
+                              <p class="text-xs text-base-content/70">
+                                <strong>System requirement:</strong> PDF text extraction requires the poppler-utils package. Contact your system administrator for installation.
+                              </p>
+                            </div>
+                          <% String.contains?(@pdf_error, "too large") -> %>
+                            <div class="mt-3 p-3 bg-base-200 rounded-lg">
+                              <p class="text-xs text-base-content/70">
+                                <strong>Tip:</strong> Try compressing your PDF or splitting it into smaller sections before uploading.
+                              </p>
+                            </div>
+                          <% String.contains?(@pdf_error, "corrupted") -> %>
+                            <div class="mt-3 p-3 bg-base-200 rounded-lg">
+                              <p class="text-xs text-base-content/70">
+                                <strong>Suggestion:</strong> Try re-saving or re-exporting your PDF from the original application.
+                              </p>
+                            </div>
+                          <% true -> %>
+                            <% # No additional help text for other errors %>
+                        <% end %>
                       </div>
                     </div>
                   <% end %>

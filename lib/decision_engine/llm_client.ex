@@ -515,24 +515,24 @@ defmodule DecisionEngine.LLMClient do
             {:cont, acc}
 
           {:data, chunk}, acc ->
-            Logger.debug("Received streaming chunk: #{inspect(chunk)}")
+            Logger.info("LM Studio streaming chunk received: #{inspect(chunk)}")
             case parse_openai_stream_chunk(chunk) do
               {:content, content} ->
-                Logger.debug("Sending content chunk: #{inspect(content)}")
+                Logger.info("LM Studio content parsed: #{inspect(content)}")
                 send(stream_pid, {:chunk, content})
                 {:cont, acc}
 
               :continue ->
-                Logger.debug("Continuing stream parsing")
+                Logger.info("LM Studio stream continuing")
                 {:cont, acc}
 
               :done ->
-                Logger.debug("Stream completed")
+                Logger.info("LM Studio stream completed successfully")
                 send(stream_pid, {:complete})
                 {:halt, :done}
 
               {:error, reason} ->
-                Logger.error("Stream parsing error: #{inspect(reason)}")
+                Logger.error("LM Studio stream parsing error: #{inspect(reason)}")
                 send(stream_pid, {:error, reason})
                 {:halt, :error}
             end
@@ -640,27 +640,34 @@ defmodule DecisionEngine.LLMClient do
     Enum.reduce_while(lines, :continue, fn line, _acc ->
       case String.trim(line) do
         "data: [DONE]" ->
+          Logger.info("LM Studio: Received [DONE] signal")
           {:halt, :done}
 
         "data: " <> json_data ->
+          Logger.debug("LM Studio: Parsing JSON data: #{String.slice(json_data, 0, 100)}")
           case Jason.decode(json_data) do
             {:ok, %{"choices" => [%{"delta" => %{"content" => content}} | _]}} when is_binary(content) ->
+              Logger.debug("LM Studio: Extracted content: #{String.slice(content, 0, 50)}")
               {:halt, {:content, content}}
 
             {:ok, %{"choices" => [%{"finish_reason" => reason} | _]}} when not is_nil(reason) ->
+              Logger.info("LM Studio: Received finish_reason: #{reason}")
               {:halt, :done}
 
-            {:ok, _} ->
+            {:ok, parsed_data} ->
+              Logger.debug("LM Studio: Received other data: #{inspect(parsed_data)}")
               {:cont, :continue}
 
             {:error, reason} ->
+              Logger.error("LM Studio: Failed to parse JSON: #{inspect(reason)}, data: #{json_data}")
               {:halt, {:error, "Failed to parse stream chunk: #{inspect(reason)}"}}
           end
 
         "" ->
           {:cont, :continue}
 
-        _ ->
+        line ->
+          Logger.debug("LM Studio: Ignoring line: #{line}")
           {:cont, :continue}
       end
     end)
@@ -728,7 +735,7 @@ defmodule DecisionEngine.LLMClient do
         {:ok, normalized_config}
 
       {:error, :api_key_required} ->
-        {:error, "API key required. Please configure LLM settings in the Settings page."}
+        {:error, :no_api_key_configured}
 
       {:error, reason} ->
         Logger.warning("Failed to get LLM config from LLMConfigManager: #{inspect(reason)}")

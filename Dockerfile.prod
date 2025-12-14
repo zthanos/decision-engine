@@ -1,0 +1,98 @@
+# Multi-stage production Dockerfile
+FROM elixir:1.19.2-alpine AS builder
+
+# Install system dependencies
+RUN apk add --no-cache \
+    build-base \
+    git \
+    nodejs \
+    npm \
+    python3 \
+    py3-pip \
+    poppler-utils \
+    imagemagick \
+    ghostscript
+
+# Install Python PDF processing libraries
+RUN pip3 install --break-system-packages PyPDF2 pdfplumber
+
+# Set working directory
+WORKDIR /app
+
+# Install Hex and Rebar
+RUN mix local.hex --force && \
+    mix local.rebar --force
+
+# Copy mix files
+COPY mix.exs mix.lock ./
+
+# Set to prod environment
+ENV MIX_ENV=prod
+
+# Install dependencies
+RUN mix deps.get --only prod
+RUN mix deps.compile
+
+# Copy assets
+COPY assets/package*.json assets/
+RUN cd assets && npm ci --only=production
+
+# Copy source code
+COPY . .
+
+# Build assets using Phoenix's asset pipeline
+RUN mix assets.deploy
+
+# Compile application
+RUN mix compile
+RUN mix release
+
+# Production stage
+FROM alpine:3.18
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    openssl \
+    ncurses-libs \
+    libstdc++ \
+    python3 \
+    py3-pip \
+    poppler-utils \
+    imagemagick \
+    ghostscript \
+    curl \
+    bash
+
+# Install Python PDF processing libraries
+RUN pip3 install --break-system-packages PyPDF2 pdfplumber
+
+# Create app user
+RUN addgroup -g 1000 app && \
+    adduser -u 1000 -G app -s /bin/sh -D app
+
+# Set working directory
+WORKDIR /app
+
+# Copy release from builder stage
+COPY --from=builder --chown=app:app /app/_build/prod/rel/decision_engine ./
+
+# Create uploads directory
+RUN mkdir -p priv/static/uploads && chown -R app:app priv/static/uploads
+
+# Switch to app user
+USER app
+
+# Expose port
+EXPOSE 4000
+
+# Set environment variables
+ENV MIX_ENV=prod
+ENV PHX_HOST=0.0.0.0
+ENV PHX_PORT=4000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD curl -f http://localhost:4000/ || exit 1
+
+# Start the application
+CMD ["./bin/decision_engine", "start"]

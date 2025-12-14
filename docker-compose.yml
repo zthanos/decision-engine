@@ -1,0 +1,60 @@
+services:
+  decision_engine:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      - MIX_ENV=dev
+      - PHX_HOST=0.0.0.0
+      - PHX_PORT=4000
+      # Add your LLM API keys here - UNCOMMENT AND ADD YOUR KEYS:
+      # - OPENAI_API_KEY=sk-your_openai_key_here
+      # - ANTHROPIC_API_KEY=sk-ant-your_anthropic_key_here
+      
+      # For LM Studio (enabled by default):
+      - LLM_PROVIDER=lmstudio
+      - LLM_ENDPOINT=http://host.docker.internal:1234
+      - LLM_MODEL=local-model
+      - LLM_TIMEOUT=300000
+      
+      # For Ollama (uncomment if using):
+      # - LLM_PROVIDER=ollama
+      # - LLM_ENDPOINT=http://host.docker.internal:11434
+      
+      # Enable fallback mode (works without API key):
+      - ENABLE_FALLBACK_MODE=true
+    volumes:
+      # Mount source code for development (optional - remove for production)
+      - .:/app
+      - /app/deps
+      - /app/_build
+      - /app/assets/node_modules
+      # Mount uploads directory to persist uploaded files
+      - uploads_data:/app/priv/static/uploads
+    stdin_open: true
+    tty: true
+    command: mix phx.server
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Allow access to host services like LM Studio
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Add a database service if needed in the future
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: decision_engine_dev
+  #     POSTGRES_USER: postgres
+  #     POSTGRES_PASSWORD: postgres
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+
+volumes:
+  uploads_data:
+  # postgres_data:

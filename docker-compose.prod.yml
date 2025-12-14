@@ -1,0 +1,40 @@
+# Production Docker Compose configuration
+services:
+  decision_engine:
+    build: 
+      context: .
+      dockerfile: Dockerfile.prod
+    ports:
+      - "4000:4000"
+    environment:
+      - MIX_ENV=prod
+      - PHX_HOST=0.0.0.0
+      - PHX_PORT=4000
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+      # Add your production LLM API keys here
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - uploads_data:/app/priv/static/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Production database (uncomment if needed)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: decision_engine_prod
+  #     POSTGRES_USER: ${POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+volumes:
+  uploads_data:
+  # postgres_data:

@@ -18,87 +18,87 @@ defmodule DecisionEngineWeb.LandingLive do
     <div class="min-h-screen bg-base-200" phx-hook="IconLoader" id="landing-page">
       <!-- Hero Section -->
 
-<section class="bg-gradient-to-br from-primary/10 via-base-200 to-secondary/10">
-  <div class="max-w-5xl mx-auto min-h-[60vh] flex flex-col items-center justify-center px-6 py-16 text-center">
-    <!-- Logo -->
-    <img
-      src={~p"/images/logo.png"}
-      alt="Decision Engine logo"
-      class="w-32 h-32 mb-4 mx-auto rounded-2xl shadow-lg"
-    />
+      <section class="bg-gradient-to-br from-primary/10 via-base-200 to-secondary/10">
+        <div class="max-w-5xl mx-auto min-h-[60vh] flex flex-col items-center justify-center px-6 py-16 text-center">
+          <!-- Logo -->
+          <img
+            src={~p"/images/logo.png"}
+            alt="Decision Engine logo"
+            class="w-32 h-32 mb-4 mx-auto rounded-2xl shadow-lg"
+          />
 
-    <!-- Title -->
-    <h1 class="text-4xl md:text-5xl font-bold tracking-tight mb-3">
-      Decision Engine
-    </h1>
+          <!-- Title -->
+          <h1 class="text-4xl md:text-5xl font-bold tracking-tight mb-3">
+            Decision Engine
+          </h1>
 
-    <!-- Subtitle -->
-    <p class="text-base md:text-lg text-base-content/70 max-w-2xl mb-10 leading-relaxed">
-      AI-powered decision automation platform that transforms business scenarios
-      into intelligent recommendations using configurable rule engines and LLM analysis.
-    </p>
-
-    <!-- Feature Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 w-full">
-      <!-- Card 1 -->
-      <div class="card bg-base-100 shadow-md">
-        <div class="card-body text-center">
-          <h3 class="font-semibold text-lg mb-2">AI Analysis</h3>
-          <p class="text-sm text-base-content/70">
-            Advanced LLM integration extracts signals from natural language scenarios
-            and generates intelligent justifications.
+          <!-- Subtitle -->
+          <p class="text-base md:text-lg text-base-content/70 max-w-2xl mb-10 leading-relaxed">
+            AI-powered decision automation platform that transforms business scenarios
+            into intelligent recommendations using configurable rule engines and LLM analysis.
           </p>
+
+          <!-- Feature Cards -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 w-full">
+            <!-- Card 1 -->
+            <div class="card bg-base-100 shadow-md">
+              <div class="card-body text-center">
+                <h3 class="font-semibold text-lg mb-2">AI Analysis</h3>
+                <p class="text-sm text-base-content/70">
+                  Advanced LLM integration extracts signals from natural language scenarios
+                  and generates intelligent justifications.
+                </p>
+              </div>
+            </div>
+
+            <!-- Card 2 -->
+            <div class="card bg-base-100 shadow-md">
+              <div class="card-body text-center">
+                <h3 class="font-semibold text-lg mb-2">Domain-Driven</h3>
+                <p class="text-sm text-base-content/70">
+                  Configurable decision domains for business contexts like Power Platform,
+                  Data Platform, and Integration scenarios.
+                </p>
+              </div>
+            </div>
+
+            <!-- Card 3 -->
+            <div class="card bg-base-100 shadow-md">
+              <div class="card-body text-center">
+                <h3 class="font-semibold text-lg mb-2">PDF Integration</h3>
+                <p class="text-sm text-base-content/70">
+                  Upload reference documents and automatically generate domain configurations
+                  from existing business rules and processes.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- CTA Buttons -->
+          <div class="flex flex-col sm:flex-row gap-4 mb-10">
+            <.nav_link navigate="/analyze" class="btn btn-primary btn-wide">
+              Start Analyzing
+            </.nav_link>
+
+            <.nav_link navigate="/domains" class="btn btn-outline btn-wide btn-secondary">
+              Manage Domains
+            </.nav_link>
+          </div>
+
+          <!-- Stats -->
+          <div class="stats shadow bg-base-100">
+            <div class="stat">
+              <div class="stat-title">Configured Domains</div>
+              <div class="stat-value text-primary"><%= @stats.total_domains %></div>
+            </div>
+
+            <div class="stat">
+              <div class="stat-title">Decisions Made</div>
+              <div class="stat-value text-secondary"><%= @stats.total_decisions %></div>
+            </div>
+          </div>
         </div>
-      </div>
-
-      <!-- Card 2 -->
-      <div class="card bg-base-100 shadow-md">
-        <div class="card-body text-center">
-          <h3 class="font-semibold text-lg mb-2">Domain-Driven</h3>
-          <p class="text-sm text-base-content/70">
-            Configurable decision domains for business contexts like Power Platform,
-            Data Platform, and Integration scenarios.
-          </p>
-        </div>
-      </div>
-
-      <!-- Card 3 -->
-      <div class="card bg-base-100 shadow-md">
-        <div class="card-body text-center">
-          <h3 class="font-semibold text-lg mb-2">PDF Integration</h3>
-          <p class="text-sm text-base-content/70">
-            Upload reference documents and automatically generate domain configurations
-            from existing business rules and processes.
-          </p>
-        </div>
-      </div>
-    </div>
-
-    <!-- CTA Buttons -->
-    <div class="flex flex-col sm:flex-row gap-4 mb-10">
-      <.nav_link navigate="/analyze" class="btn btn-primary btn-wide">
-        Start Analyzing
-      </.nav_link>
-
-      <.nav_link navigate="/domains" class="btn btn-outline btn-wide btn-secondary">
-        Manage Domains
-      </.nav_link>
-    </div>
-
-    <!-- Stats -->
-    <div class="stats shadow bg-base-100">
-      <div class="stat">
-        <div class="stat-title">Configured Domains</div>
-        <div class="stat-value text-primary"><%= @stats.total_domains %></div>
-      </div>
-
-      <div class="stat">
-        <div class="stat-title">Decisions Made</div>
-        <div class="stat-value text-secondary"><%= @stats.total_decisions %></div>
-      </div>
-    </div>
-  </div>
-</section>
+      </section>
 
       <!-- How It Works Section -->
       <section class="py-20 bg-base-100">
@@ -260,7 +260,12 @@ defmodule DecisionEngineWeb.LandingLive do
               class="card bg-primary/5 hover:bg-primary/10 transition-colors border border-primary/20 hover:border-primary/40"
             >
               <div class="card-body text-center">
-                <.icon name="cpu-chip" class="w-12 h-12 text-primary mx-auto mb-2" />
+                <img
+                  src={~p"/images/analyze.png"}
+                  alt="Analyze logo"
+                  class="w-24 h-24  mx-auto mb-2"
+                />
+
                 <h3 class="card-title justify-center text-lg">Analyze</h3>
                 <p class="text-sm text-base-content/70">
                   Start analyzing your business scenarios and get AI-powered recommendations.
@@ -273,7 +278,12 @@ defmodule DecisionEngineWeb.LandingLive do
               class="card bg-secondary/5 hover:bg-secondary/10 transition-colors border border-secondary/20 hover:border-secondary/40"
             >
               <div class="card-body text-center">
-                <.icon name="building-office" class="w-12 h-12 text-secondary mx-auto mb-2" />
+                <img
+                  src={~p"/images/domains.png"}
+                  alt="Analyze logo"
+                  class="w-24 h-24  mx-auto mb-2"
+                />
+
                 <h3 class="card-title justify-center text-lg">Domains</h3>
                 <p class="text-sm text-base-content/70">
                   Configure decision domains and upload PDF documents for analysis.
@@ -286,7 +296,11 @@ defmodule DecisionEngineWeb.LandingLive do
               class="card bg-accent/5 hover:bg-accent/10 transition-colors border border-accent/20 hover:border-accent/40"
             >
               <div class="card-body text-center">
-                <.icon name="clock" class="w-12 h-12 text-accent mx-auto mb-2" />
+                <img
+                  src={~p"/images/history.png"}
+                  alt="Analyze logo"
+                  class="w-24 h-24  mx-auto mb-2"
+                />
                 <h3 class="card-title justify-center text-lg">History</h3>
                 <p class="text-sm text-base-content/70">
                   Review past decisions, search history, and export data for analysis.
@@ -299,7 +313,11 @@ defmodule DecisionEngineWeb.LandingLive do
               class="card bg-info/5 hover:bg-info/10 transition-colors border border-info/20 hover:border-info/40"
             >
               <div class="card-body text-center">
-                <.icon name="cog-6-tooth" class="w-12 h-12 text-info mx-auto mb-2" />
+                <img
+                  src={~p"/images/settings.png"}
+                  alt="Analyze logo"
+                  class="w-24 h-24  mx-auto mb-2"
+                />
                 <h3 class="card-title justify-center text-lg">Settings</h3>
                 <p class="text-sm text-base-content/70">
                   Configure LLM providers, API keys, and system preferences.

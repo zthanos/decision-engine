@@ -1,0 +1,39 @@
+# Ignore build artifacts
+_build/
+deps/
+.elixir_ls/
+
+# Ignore node modules
+assets/node_modules/
+
+# Ignore git
+.git/
+.gitignore
+
+# Ignore IDE files
+.vscode/
+.kiro/
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore log files
+*.log
+
+# Ignore temporary files
+tmp/
+temp/
+
+# Ignore test coverage
+cover/
+
+# Ignore documentation
+doc/
+
+# Ignore mix lock for development
+# mix.lock
+
+# Ignore environment files
+.env
+.env.local
