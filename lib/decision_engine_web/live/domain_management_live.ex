@@ -32,6 +32,23 @@ defmodule DecisionEngineWeb.DomainManagementLive do
       |> assign(:streaming_content, "")
       |> assign(:processing_start_time, nil)
       |> assign(:last_domain_name, nil)
+      # Reflection-related assigns
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 0)
+      |> assign(:reflection_stage, nil)
+      |> assign(:reflection_message, nil)
+      |> assign(:reflection_iteration, 0)
+      |> assign(:reflection_max_iterations, 3)
+      |> assign(:reflection_result, nil)
+      |> assign(:reflection_error, nil)
+      |> assign(:show_reflection_comparison, false)
+      |> assign(:reflection_tracker_ref, nil)
+      |> assign(:reflection_start_time, nil)
+      # Reflection configuration UI assigns
+      |> assign(:show_reflection_config, false)
+      |> assign(:reflection_config, nil)
+      |> assign(:reflection_config_errors, [])
+      |> assign(:reflection_config_loading, false)
       |> allow_upload(:pdf_file,
           accept: ~w(.pdf),
           max_entries: 1,
@@ -558,6 +575,265 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   end
 
   @impl true
+  def handle_event("start_reflection", %{"domain" => domain_name}, socket) do
+    domain_atom = String.to_atom(domain_name)
+
+    case DomainManager.get_domain(domain_atom) do
+      {:ok, domain_config} ->
+        Logger.info("Starting reflection process for domain: #{domain_name}")
+
+        # Generate unique session ID for this reflection
+        session_id = "reflection_#{domain_name}_#{System.system_time(:millisecond)}"
+
+        socket =
+          socket
+          |> assign(:reflection_processing, true)
+          |> assign(:reflection_progress, 0)
+          |> assign(:reflection_stage, :initializing)
+          |> assign(:reflection_message, "Initializing reflection process...")
+          |> assign(:reflection_iteration, 0)
+          |> assign(:reflection_result, nil)
+          |> assign(:reflection_error, nil)
+          |> assign(:reflection_start_time, System.system_time(:second))
+
+        # Start async reflection process
+        pid = self()
+        Task.start(fn ->
+          case DecisionEngine.ReflectionCoordinator.start_reflection(domain_config, %{
+            session_id: session_id,
+            stream_pid: pid,
+            max_iterations: socket.assigns.reflection_max_iterations
+          }) do
+            {:ok, reflection_result} ->
+              send(pid, {:reflection_completed, reflection_result})
+            {:error, reason} ->
+              send(pid, {:reflection_failed, reason})
+            {:cancelled, reason} ->
+              send(pid, {:reflection_cancelled, reason})
+          end
+        end)
+
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        socket = put_flash(socket, :error, "Failed to load domain configuration for reflection")
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("start_concurrent_reflection", %{"domain" => domain_name}, socket) do
+    domain_atom = String.to_atom(domain_name)
+
+    case DomainManager.get_domain(domain_atom) do
+      {:ok, domain_config} ->
+        Logger.info("Starting concurrent reflection process for domain: #{domain_name}")
+
+        # Generate unique session ID for this reflection
+        session_id = "concurrent_reflection_#{domain_name}_#{System.system_time(:millisecond)}"
+
+        # Prepare options for concurrent processing
+        reflection_options = %{
+          session_id: session_id,
+          callback_pid: self(),
+          priority: :normal,
+          max_iterations: socket.assigns.reflection_max_iterations,
+          enable_progress_tracking: true,
+          enable_cancellation: true
+        }
+
+        case DecisionEngine.ReflectionCoordinator.start_reflection_async(domain_config, reflection_options) do
+          {:ok, request_id} ->
+            socket =
+              socket
+              |> assign(:reflection_processing, true)
+              |> assign(:reflection_request_id, request_id)
+              |> assign(:reflection_progress, 0)
+              |> assign(:reflection_stage, :queued)
+              |> assign(:reflection_message, "Reflection request queued for processing...")
+              |> assign(:reflection_iteration, 0)
+              |> assign(:reflection_result, nil)
+              |> assign(:reflection_error, nil)
+              |> assign(:reflection_start_time, System.system_time(:second))
+              |> put_flash(:info, "Reflection request queued successfully")
+
+            {:noreply, socket}
+
+          {:error, reason} ->
+            socket = put_flash(socket, :error, "Failed to queue reflection request: #{reason}")
+            {:noreply, socket}
+        end
+
+      {:error, _reason} ->
+        socket = put_flash(socket, :error, "Failed to load domain configuration for reflection")
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("cancel_reflection", _params, socket) do
+    if socket.assigns.reflection_tracker_ref do
+      DecisionEngine.ReflectionProgressTracker.cancel_tracking(
+        socket.assigns.reflection_tracker_ref,
+        "User requested cancellation"
+      )
+    end
+
+    socket =
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 0)
+      |> assign(:reflection_stage, nil)
+      |> assign(:reflection_message, nil)
+      |> assign(:reflection_tracker_ref, nil)
+      |> put_flash(:info, "Reflection process cancelled")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("toggle_reflection_comparison", _params, socket) do
+    socket = assign(socket, :show_reflection_comparison, !socket.assigns.show_reflection_comparison)
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("apply_reflection_result", _params, socket) do
+    case socket.assigns.reflection_result do
+      nil ->
+        socket = put_flash(socket, :error, "No reflection result available to apply")
+        {:noreply, socket}
+
+      reflection_result ->
+        # Convert refined config to form data and switch to edit mode
+        form_data = convert_domain_config_to_form_data(reflection_result.refined_config)
+
+        socket =
+          socket
+          |> assign(:form_mode, :edit)
+          |> assign(:form_data, form_data)
+          |> assign(:selected_domain, String.to_atom(reflection_result.refined_config["name"]))
+          |> assign(:reflection_processing, false)
+          |> assign(:show_reflection_comparison, false)
+          |> put_flash(:info, "Applied refined configuration from reflection. Review and save to persist changes.")
+
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("dismiss_reflection_result", _params, socket) do
+    socket =
+      socket
+      |> assign(:reflection_result, nil)
+      |> assign(:reflection_error, nil)
+      |> assign(:show_reflection_comparison, false)
+      |> assign(:reflection_processing, false)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("show_reflection_config", _params, socket) do
+    socket =
+      socket
+      |> assign(:show_reflection_config, true)
+      |> assign(:reflection_config_loading, true)
+
+    # Load current reflection configuration
+    pid = self()
+    Task.start(fn ->
+      case DecisionEngine.ReflectionConfig.get_current_config() do
+        {:ok, config} ->
+          send(pid, {:reflection_config_loaded, config})
+        {:error, reason} ->
+          send(pid, {:reflection_config_load_failed, reason})
+      end
+    end)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("hide_reflection_config", _params, socket) do
+    socket =
+      socket
+      |> assign(:show_reflection_config, false)
+      |> assign(:reflection_config, nil)
+      |> assign(:reflection_config_errors, [])
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("save_reflection_config", %{"config" => config_params}, socket) do
+    # Parse and validate configuration parameters
+    timeout_minutes = String.to_integer(config_params["timeout_ms"] || "5")
+    parsed_config = %{
+      enabled: config_params["enabled"] == "true",
+      max_iterations: String.to_integer(config_params["max_iterations"] || "3"),
+      quality_threshold: String.to_float(config_params["quality_threshold"] || "0.75"),
+      timeout_ms: timeout_minutes * 60_000,  # Convert minutes to milliseconds
+      custom_prompts: %{
+        evaluation: if(String.trim(config_params["evaluation_prompt"] || "") == "", do: nil, else: config_params["evaluation_prompt"]),
+        refinement: if(String.trim(config_params["refinement_prompt"] || "") == "", do: nil, else: config_params["refinement_prompt"])
+      },
+      quality_weights: %{
+        completeness: String.to_float(config_params["weight_completeness"] || "0.30"),
+        accuracy: String.to_float(config_params["weight_accuracy"] || "0.25"),
+        consistency: String.to_float(config_params["weight_consistency"] || "0.25"),
+        usability: String.to_float(config_params["weight_usability"] || "0.20")
+      }
+    }
+
+    # Save configuration
+    case DecisionEngine.ReflectionConfig.save_config(parsed_config) do
+      :ok ->
+        socket =
+          socket
+          |> assign(:show_reflection_config, false)
+          |> assign(:reflection_config_errors, [])
+          |> put_flash(:info, "Reflection configuration saved successfully")
+
+        {:noreply, socket}
+
+      {:error, errors} when is_list(errors) ->
+        socket = assign(socket, :reflection_config_errors, errors)
+        {:noreply, socket}
+
+      {:error, reason} ->
+        socket = assign(socket, :reflection_config_errors, [to_string(reason)])
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("reset_reflection_config", _params, socket) do
+    case DecisionEngine.ReflectionConfig.reset_to_defaults() do
+      :ok ->
+        # Reload the default configuration
+        case DecisionEngine.ReflectionConfig.get_current_config() do
+          {:ok, config} ->
+            socket =
+              socket
+              |> assign(:reflection_config, config)
+              |> assign(:reflection_config_errors, [])
+              |> put_flash(:info, "Reflection configuration reset to defaults")
+
+            {:noreply, socket}
+
+          {:error, _reason} ->
+            socket = put_flash(socket, :error, "Failed to reload configuration after reset")
+            {:noreply, socket}
+        end
+
+      {:error, reason} ->
+        socket = put_flash(socket, :error, "Failed to reset configuration: #{reason}")
+        {:noreply, socket}
+    end
+  end
+
+  @impl true
   def handle_event("cancel_pdf_upload", _params, socket) do
     # If processing is active, show cancellation feedback
     if socket.assigns.pdf_processing do
@@ -839,26 +1115,145 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     start_time = socket.assigns[:processing_start_time] || System.system_time(:second)
     total_time = System.system_time(:second) - start_time
 
-    # Convert domain config to form data format for proper form population
-    form_data = convert_domain_config_to_form_data(domain_config)
+    # Automatically save the domain to the database
+    case DomainManager.create_domain(domain_config) do
+      {:ok, _} ->
+        Logger.info("Domain '#{domain_config.name}' automatically saved to database")
 
-    # Switch to edit mode with the generated configuration
-    socket =
-      socket
-      |> assign(:form_mode, :new)
-      |> assign(:form_data, form_data)
-      |> assign(:pdf_processing, false)
-      |> assign(:pdf_upload_mode, false)
-      |> assign(:processing_step, nil)
-      |> assign(:processing_progress, 0)
-      |> assign(:processing_message, nil)
-      |> assign(:streaming_content, "")
-      |> assign(:processing_start_time, nil)
-      |> assign(:errors, [])
-      |> clear_all_uploads(:pdf_file)  # Clear all upload entries
-      |> put_flash(:info, "🎉 Domain configuration generated successfully in #{total_time} seconds! Review and save your new domain below.")
+        # Refresh the domains list to show the new domain
+        {:ok, domains} = DomainManager.list_domains()
 
-    {:noreply, socket}
+        # Convert domain config to form data format for proper form population
+        form_data = convert_domain_config_to_form_data(domain_config)
+
+        # Check if reflection should be automatically triggered for PDF-generated domains
+        should_auto_reflect = should_trigger_auto_reflection?(domain_config)
+
+        socket = if should_auto_reflect do
+          Logger.info("Automatically triggering reflection for PDF-generated domain: #{domain_config.name}")
+
+          # Start reflection process automatically
+          session_id = "auto_reflection_#{domain_config.name}_#{System.system_time(:millisecond)}"
+
+          reflection_options = %{
+            session_id: session_id,
+            callback_pid: self(),
+            priority: :normal,
+            max_iterations: 3,
+            enable_progress_tracking: true,
+            enable_cancellation: true,
+            auto_triggered: true
+          }
+
+          case DecisionEngine.ReflectionCoordinator.start_reflection_async(domain_config, reflection_options) do
+            {:ok, request_id} ->
+              Logger.info("Started automatic reflection for PDF domain: #{domain_config.name}, request_id: #{request_id}")
+
+              socket
+              |> assign(:domains, domains)
+              |> assign(:form_mode, :list)
+              |> assign(:form_data, %{})
+              |> assign(:pdf_processing, false)
+              |> assign(:pdf_upload_mode, false)
+              |> assign(:processing_step, nil)
+              |> assign(:processing_progress, 0)
+              |> assign(:processing_message, nil)
+              |> assign(:streaming_content, "")
+              |> assign(:processing_start_time, nil)
+              |> assign(:errors, [])
+              |> assign(:reflection_processing, true)
+              |> assign(:reflection_request_id, request_id)
+              |> assign(:reflection_progress, 0)
+              |> assign(:reflection_stage, :initializing)
+              |> assign(:reflection_message, "Automatically improving domain configuration...")
+              |> clear_all_uploads(:pdf_file)
+              |> put_flash(:info, "🎉 Domain '#{domain_config.name}' created and saved in #{total_time}s! Now automatically improving with AI reflection...")
+
+            {:error, reason} ->
+              Logger.warning("Failed to start automatic reflection for PDF domain: #{reason}")
+
+              socket
+              |> assign(:domains, domains)
+              |> assign(:form_mode, :list)
+              |> assign(:form_data, %{})
+              |> assign(:pdf_processing, false)
+              |> assign(:pdf_upload_mode, false)
+              |> assign(:processing_step, nil)
+              |> assign(:processing_progress, 0)
+              |> assign(:processing_message, nil)
+              |> assign(:streaming_content, "")
+              |> assign(:processing_start_time, nil)
+              |> assign(:errors, [])
+              |> clear_all_uploads(:pdf_file)
+              |> put_flash(:info, "🎉 Domain '#{domain_config.name}' created and saved in #{total_time}s! You can now trigger reflection manually if desired.")
+          end
+        else
+          # No automatic reflection
+          socket
+          |> assign(:domains, domains)
+          |> assign(:form_mode, :list)
+          |> assign(:form_data, %{})
+          |> assign(:pdf_processing, false)
+          |> assign(:pdf_upload_mode, false)
+          |> assign(:processing_step, nil)
+          |> assign(:processing_progress, 0)
+          |> assign(:processing_message, nil)
+          |> assign(:streaming_content, "")
+          |> assign(:processing_start_time, nil)
+          |> assign(:errors, [])
+          |> clear_all_uploads(:pdf_file)
+          |> put_flash(:info, "🎉 Domain '#{domain_config.name}' created and saved successfully in #{total_time} seconds!")
+        end
+
+        {:noreply, socket}
+
+      {:error, :domain_already_exists} ->
+        Logger.warning("Domain '#{domain_config.name}' already exists, switching to edit mode")
+
+        # Convert domain config to form data and switch to edit mode
+        form_data = convert_domain_config_to_form_data(domain_config)
+
+        socket =
+          socket
+          |> assign(:form_mode, :edit)
+          |> assign(:selected_domain, String.to_atom(domain_config.name))
+          |> assign(:form_data, form_data)
+          |> assign(:pdf_processing, false)
+          |> assign(:pdf_upload_mode, false)
+          |> assign(:processing_step, nil)
+          |> assign(:processing_progress, 0)
+          |> assign(:processing_message, nil)
+          |> assign(:streaming_content, "")
+          |> assign(:processing_start_time, nil)
+          |> assign(:errors, ["Domain name already exists. Review the configuration below and save to update."])
+          |> clear_all_uploads(:pdf_file)
+          |> put_flash(:warning, "⚠️ Domain '#{domain_config.name}' already exists. Generated configuration loaded for editing in #{total_time}s.")
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        Logger.error("Failed to save PDF-generated domain '#{domain_config.name}': #{inspect(reason)}")
+
+        # Convert domain config to form data and show in form for manual save
+        form_data = convert_domain_config_to_form_data(domain_config)
+
+        socket =
+          socket
+          |> assign(:form_mode, :new)
+          |> assign(:form_data, form_data)
+          |> assign(:pdf_processing, false)
+          |> assign(:pdf_upload_mode, false)
+          |> assign(:processing_step, nil)
+          |> assign(:processing_progress, 0)
+          |> assign(:processing_message, nil)
+          |> assign(:streaming_content, "")
+          |> assign(:processing_start_time, nil)
+          |> assign(:errors, ["Failed to save domain automatically: #{inspect(reason)}"])
+          |> clear_all_uploads(:pdf_file)
+          |> put_flash(:error, "❌ Domain generated in #{total_time}s but failed to save automatically. Please review and save manually.")
+
+        {:noreply, socket}
+    end
   end
 
   @impl true
@@ -869,26 +1264,80 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     start_time = socket.assigns[:processing_start_time] || System.system_time(:second)
     total_time = System.system_time(:second) - start_time
 
-    # Convert domain config to form data format for proper form population
-    form_data = convert_domain_config_to_form_data(domain_config)
+    # Try to save the domain despite warnings (auto-correction should have fixed most issues)
+    case DomainManager.create_domain(domain_config) do
+      {:ok, _} ->
+        Logger.info("Domain '#{domain_config.name}' saved successfully despite validation warnings")
 
-    # Switch to edit mode with the generated configuration and show warnings
-    socket =
-      socket
-      |> assign(:form_mode, :new)
-      |> assign(:form_data, form_data)
-      |> assign(:pdf_processing, false)
-      |> assign(:pdf_upload_mode, false)
-      |> assign(:processing_step, nil)
-      |> assign(:processing_progress, 0)
-      |> assign(:processing_message, nil)
-      |> assign(:streaming_content, "")
-      |> assign(:processing_start_time, nil)
-      |> assign(:errors, validation_errors)
-      |> clear_all_uploads(:pdf_file)  # Clear all upload entries
-      |> put_flash(:warning, "⚠️ Domain configuration generated in #{total_time} seconds with validation warnings. Please review and correct the issues below before saving.")
+        # Refresh the domains list to show the new domain
+        {:ok, domains} = DomainManager.list_domains()
 
-    {:noreply, socket}
+        socket =
+          socket
+          |> assign(:domains, domains)
+          |> assign(:form_mode, :list)
+          |> assign(:form_data, %{})
+          |> assign(:pdf_processing, false)
+          |> assign(:pdf_upload_mode, false)
+          |> assign(:processing_step, nil)
+          |> assign(:processing_progress, 0)
+          |> assign(:processing_message, nil)
+          |> assign(:streaming_content, "")
+          |> assign(:processing_start_time, nil)
+          |> assign(:errors, [])
+          |> clear_all_uploads(:pdf_file)
+          |> put_flash(:info, "🎉 Domain '#{domain_config.name}' created and saved in #{total_time}s! Some validation warnings were auto-corrected.")
+
+        {:noreply, socket}
+
+      {:error, :domain_already_exists} ->
+        Logger.warning("Domain '#{domain_config.name}' already exists, showing in edit mode with warnings")
+
+        # Convert domain config to form data and switch to edit mode
+        form_data = convert_domain_config_to_form_data(domain_config)
+
+        socket =
+          socket
+          |> assign(:form_mode, :edit)
+          |> assign(:selected_domain, String.to_atom(domain_config.name))
+          |> assign(:form_data, form_data)
+          |> assign(:pdf_processing, false)
+          |> assign(:pdf_upload_mode, false)
+          |> assign(:processing_step, nil)
+          |> assign(:processing_progress, 0)
+          |> assign(:processing_message, nil)
+          |> assign(:streaming_content, "")
+          |> assign(:processing_start_time, nil)
+          |> assign(:errors, validation_errors ++ ["Domain name already exists. Review the configuration below and save to update."])
+          |> clear_all_uploads(:pdf_file)
+          |> put_flash(:warning, "⚠️ Domain '#{domain_config.name}' already exists. Generated configuration with warnings loaded for editing in #{total_time}s.")
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        Logger.error("Failed to save PDF-generated domain with warnings '#{domain_config.name}': #{inspect(reason)}")
+
+        # Convert domain config to form data format for proper form population
+        form_data = convert_domain_config_to_form_data(domain_config)
+
+        # Switch to edit mode with the generated configuration and show warnings
+        socket =
+          socket
+          |> assign(:form_mode, :new)
+          |> assign(:form_data, form_data)
+          |> assign(:pdf_processing, false)
+          |> assign(:pdf_upload_mode, false)
+          |> assign(:processing_step, nil)
+          |> assign(:processing_progress, 0)
+          |> assign(:processing_message, nil)
+          |> assign(:streaming_content, "")
+          |> assign(:processing_start_time, nil)
+          |> assign(:errors, validation_errors ++ ["Failed to save domain automatically: #{inspect(reason)}"])
+          |> clear_all_uploads(:pdf_file)
+          |> put_flash(:warning, "⚠️ Domain generated in #{total_time}s with warnings and failed to save automatically. Please review and correct the issues below before saving.")
+
+        {:noreply, socket}
+    end
   end
 
   @impl true
@@ -930,6 +1379,209 @@ defmodule DecisionEngineWeb.DomainManagementLive do
     {:noreply, socket}
   end
 
+  # Reflection progress and completion handlers
+  @impl true
+  def handle_info({:reflection_progress, tracker_ref, stage, progress, description}, socket) do
+    Logger.debug("Reflection progress: #{stage} - #{progress}% - #{description}")
+
+    socket =
+      socket
+      |> assign(:reflection_progress, progress)
+      |> assign(:reflection_stage, stage)
+      |> assign(:reflection_message, description)
+      |> assign(:reflection_tracker_ref, tracker_ref)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_iteration_complete, _tracker_ref, current_iteration, total_iterations, description}, socket) do
+    Logger.debug("Reflection iteration complete: #{current_iteration}/#{total_iterations}")
+
+    socket =
+      socket
+      |> assign(:reflection_iteration, current_iteration)
+      |> assign(:reflection_max_iterations, total_iterations)
+      |> assign(:reflection_message, description)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_completed, reflection_result}, socket) do
+    Logger.info("Reflection process completed successfully")
+
+    # Calculate processing time
+    start_time = socket.assigns[:reflection_start_time] || System.system_time(:second)
+    processing_time = System.system_time(:second) - start_time
+
+    socket =
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 100)
+      |> assign(:reflection_stage, :completed)
+      |> assign(:reflection_message, "Reflection completed successfully in #{processing_time} seconds")
+      |> assign(:reflection_result, reflection_result)
+      |> assign(:show_reflection_comparison, true)
+      |> put_flash(:info, "🎉 Domain reflection completed! Review the improvements and apply if desired.")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_failed, reason}, socket) do
+    Logger.error("Reflection process failed: #{inspect(reason)}")
+
+    error_message = case reason do
+      :no_api_key_configured -> "LLM API key not configured. Please configure your API key in Settings."
+      {:llm_call_failed, _} -> "Failed to connect to LLM service. Please check your configuration."
+      :timeout -> "Reflection process timed out. Try again or reduce the complexity."
+      _ -> "Reflection process failed: #{inspect(reason)}"
+    end
+
+    socket =
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 0)
+      |> assign(:reflection_stage, nil)
+      |> assign(:reflection_message, nil)
+      |> assign(:reflection_error, error_message)
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_cancelled, reason}, socket) do
+    Logger.info("Reflection process cancelled: #{reason}")
+
+    socket =
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 0)
+      |> assign(:reflection_stage, nil)
+      |> assign(:reflection_message, nil)
+      |> put_flash(:info, "Reflection process cancelled")
+
+    {:noreply, socket}
+  end
+
+  # Concurrent reflection completion handlers
+  @impl true
+  def handle_info({:reflection_completed, request_id, reflection_result}, socket) do
+    Logger.info("Concurrent reflection process completed successfully for request: #{request_id}")
+
+    # Check if this was an automatic reflection triggered by PDF processing
+    is_auto_reflection = socket.assigns[:reflection_processing] &&
+                        socket.assigns[:form_mode] == :new &&
+                        not is_nil(socket.assigns[:form_data])
+
+    socket = if is_auto_reflection do
+      Logger.info("Updating form data with improved domain configuration from automatic reflection")
+
+      # Update the form data with the improved configuration
+      improved_config = reflection_result.refined_config
+      updated_form_data = convert_domain_config_to_form_data(improved_config)
+
+      # Calculate improvement metrics for user feedback
+      quality_improvement = reflection_result.quality_scores.improvement
+      iterations_performed = reflection_result.metadata.iterations_performed
+
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 100)
+      |> assign(:reflection_stage, :completed)
+      |> assign(:reflection_message, "Automatic reflection completed successfully")
+      |> assign(:reflection_result, reflection_result)
+      |> assign(:reflection_request_id, nil)
+      |> assign(:form_data, updated_form_data)
+      |> put_flash(:success, "🚀 Domain automatically improved! Quality increased by #{Float.round(quality_improvement * 100, 1)}% in #{iterations_performed} iterations. Review the enhanced patterns below.")
+    else
+      # Regular reflection completion
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 100)
+      |> assign(:reflection_stage, :completed)
+      |> assign(:reflection_message, "Reflection completed successfully")
+      |> assign(:reflection_result, reflection_result)
+      |> assign(:reflection_request_id, nil)
+      |> put_flash(:success, "Reflection process completed successfully!")
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_failed, request_id, error}, socket) do
+    Logger.error("Concurrent reflection process failed for request #{request_id}: #{inspect(error)}")
+
+    # Check if this was an automatic reflection triggered by PDF processing
+    is_auto_reflection = socket.assigns[:reflection_processing] &&
+                        socket.assigns[:form_mode] == :new &&
+                        not is_nil(socket.assigns[:form_data])
+
+    socket = if is_auto_reflection do
+      Logger.warning("Automatic reflection failed, but domain is still usable: #{error}")
+
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 0)
+      |> assign(:reflection_stage, :failed)
+      |> assign(:reflection_message, "Automatic reflection failed")
+      |> assign(:reflection_error, error)
+      |> assign(:reflection_request_id, nil)
+      |> put_flash(:warning, "⚠️ Automatic domain improvement failed, but your domain is ready to use. You can manually trigger reflection after saving if needed.")
+    else
+      # Regular reflection failure
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 0)
+      |> assign(:reflection_stage, :failed)
+      |> assign(:reflection_message, "Reflection failed")
+      |> assign(:reflection_error, error)
+      |> assign(:reflection_request_id, nil)
+      |> put_flash(:error, "Reflection process failed: #{error}")
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_cancelled, request_id, reason}, socket) do
+    Logger.info("Concurrent reflection process cancelled for request #{request_id}: #{reason}")
+
+    socket =
+      socket
+      |> assign(:reflection_processing, false)
+      |> assign(:reflection_progress, 0)
+      |> assign(:reflection_stage, :cancelled)
+      |> assign(:reflection_message, "Reflection cancelled")
+      |> assign(:reflection_request_id, nil)
+      |> put_flash(:info, "Reflection process was cancelled: #{reason}")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_config_loaded, config}, socket) do
+    socket =
+      socket
+      |> assign(:reflection_config, config)
+      |> assign(:reflection_config_loading, false)
+      |> assign(:reflection_config_errors, [])
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:reflection_config_load_failed, reason}, socket) do
+    socket =
+      socket
+      |> assign(:reflection_config_loading, false)
+      |> assign(:reflection_config_errors, ["Failed to load configuration: #{reason}"])
+
+    {:noreply, socket}
+  end
+
   defp format_domain_name(domain_name) when is_binary(domain_name) do
     domain_name
     |> String.replace("_", " ")
@@ -949,6 +1601,85 @@ defmodule DecisionEngineWeb.DomainManagementLive do
   defp error_to_string(:not_accepted), do: "File type not accepted (PDF only)"
   defp error_to_string(:too_many_files), do: "Too many files (max 1)"
   defp error_to_string(error), do: "Upload error: #{inspect(error)}"
+
+  # Determines if automatic reflection should be triggered for a PDF-generated domain
+  defp should_trigger_auto_reflection?(domain_config) do
+    patterns = domain_config.patterns || []
+
+    # Trigger reflection if:
+    # 1. There are no patterns, or
+    # 2. Patterns are very basic (only 1-2 patterns with minimal conditions), or
+    # 3. Patterns lack proper decision logic structure
+    cond do
+      length(patterns) == 0 ->
+        Logger.info("Auto-reflection triggered: No decision patterns found")
+        true
+
+      length(patterns) <= 2 and has_basic_patterns?(patterns) ->
+        Logger.info("Auto-reflection triggered: Only basic patterns found")
+        true
+
+      has_incomplete_patterns?(patterns) ->
+        Logger.info("Auto-reflection triggered: Incomplete patterns detected")
+        true
+
+      true ->
+        Logger.info("Auto-reflection skipped: Domain has sufficient patterns")
+        false
+    end
+  end
+
+  defp has_basic_patterns?(patterns) do
+    Enum.all?(patterns, fn pattern ->
+      use_when = pattern["use_when"] || []
+      avoid_when = pattern["avoid_when"] || []
+
+      # Consider basic if very few conditions or generic structure
+      length(use_when) + length(avoid_when) <= 2 or
+      is_generic_pattern?(pattern)
+    end)
+  end
+
+  defp has_incomplete_patterns?(patterns) do
+    Enum.any?(patterns, fn pattern ->
+      # Check for missing essential fields or empty conditions
+      missing_outcome = is_nil(pattern["outcome"]) or String.trim(pattern["outcome"] || "") == ""
+      missing_conditions = (pattern["use_when"] || []) == [] and (pattern["avoid_when"] || []) == []
+      missing_summary = is_nil(pattern["summary"]) or String.trim(pattern["summary"] || "") == ""
+
+      # Check for placeholder/example conditions
+      has_placeholder_conditions = has_placeholder_conditions?(pattern)
+
+      missing_outcome or missing_conditions or missing_summary or has_placeholder_conditions
+    end)
+  end
+
+  defp has_placeholder_conditions?(pattern) do
+    use_when = pattern["use_when"] || []
+    avoid_when = pattern["avoid_when"] || []
+    all_conditions = use_when ++ avoid_when
+
+    Enum.any?(all_conditions, fn condition ->
+      case condition do
+        %{"field" => "example_field"} -> true
+        %{"value" => ["example_value"]} -> true
+        %{"value" => "example_value"} -> true
+        _ -> false
+      end
+    end)
+  end
+
+  defp is_generic_pattern?(pattern) do
+    summary = String.downcase(pattern["summary"] || "")
+    outcome = String.downcase(pattern["outcome"] || "")
+
+    # Check for generic/placeholder text
+    generic_terms = ["basic", "pattern", "summary", "action", "generic", "default", "placeholder"]
+
+    Enum.any?(generic_terms, fn term ->
+      String.contains?(summary, term) or String.contains?(outcome, term)
+    end)
+  end
 
   defp convert_domain_config_to_form_data(domain_config) do
     %{
@@ -995,6 +1726,72 @@ defmodule DecisionEngineWeb.DomainManagementLive do
 
   defp ensure_minimum_patterns([]), do: [default_pattern()]
   defp ensure_minimum_patterns(patterns), do: patterns
+
+  # Helper component for displaying configuration previews in reflection comparison
+  attr :config, :map, required: true
+
+  defp reflection_config_preview(assigns) do
+    ~H"""
+    <div class="space-y-3 text-sm">
+      <div>
+        <span class="font-semibold text-base-content/80">Name:</span>
+        <span class="ml-2 font-mono text-base-content"><%= @config["name"] || "N/A" %></span>
+      </div>
+
+      <div>
+        <span class="font-semibold text-base-content/80">Display Name:</span>
+        <span class="ml-2"><%= @config["display_name"] || "N/A" %></span>
+      </div>
+
+      <%= if @config["description"] && String.trim(@config["description"]) != "" do %>
+        <div>
+          <span class="font-semibold text-base-content/80">Description:</span>
+          <p class="mt-1 text-xs text-base-content/70 italic">
+            <%= String.slice(@config["description"], 0, 150) %>
+            <%= if String.length(@config["description"]) > 150, do: "..." %>
+          </p>
+        </div>
+      <% end %>
+
+      <div>
+        <span class="font-semibold text-base-content/80">Signal Fields:</span>
+        <span class="ml-2 text-primary"><%= length(@config["signals_fields"] || []) %></span>
+        <%= if length(@config["signals_fields"] || []) > 0 do %>
+          <div class="mt-1 flex flex-wrap gap-1">
+            <%= for field <- Enum.take(@config["signals_fields"], 3) do %>
+              <span class="badge badge-primary badge-xs"><%= field %></span>
+            <% end %>
+            <%= if length(@config["signals_fields"]) > 3 do %>
+              <span class="badge badge-outline badge-xs">+<%= length(@config["signals_fields"]) - 3 %> more</span>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+
+      <div>
+        <span class="font-semibold text-base-content/80">Patterns:</span>
+        <span class="ml-2 text-secondary"><%= length(@config["patterns"] || []) %></span>
+        <%= if length(@config["patterns"] || []) > 0 do %>
+          <div class="mt-1 space-y-1">
+            <%= for pattern <- Enum.take(@config["patterns"], 2) do %>
+              <div class="text-xs bg-base-100 rounded p-2 border border-base-200">
+                <div class="flex items-center justify-between">
+                  <span class="font-mono text-secondary"><%= pattern["id"] || "pattern" %></span>
+                  <span class="text-base-content/60">→ <%= pattern["outcome"] || "outcome" %></span>
+                </div>
+              </div>
+            <% end %>
+            <%= if length(@config["patterns"]) > 2 do %>
+              <div class="text-xs text-base-content/50 italic">
+                +<%= length(@config["patterns"]) - 2 %> more patterns
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
 
 
 
@@ -1070,6 +1867,14 @@ defmodule DecisionEngineWeb.DomainManagementLive do
                 </p>
               </div>
               <div class="flex gap-2">
+                <.icon_button
+                  name="cog-6-tooth"
+                  text="Reflection Settings"
+                  phx-click="show_reflection_config"
+                  class="btn btn-ghost btn-outline"
+                  icon_class="w-5 h-5"
+                  aria-label="Configure reflection settings"
+                />
                 <.icon_button
                   name="document-arrow-up"
                   text="From PDF"
@@ -1519,6 +2324,322 @@ defmodule DecisionEngineWeb.DomainManagementLive do
               </div>
             <% end %>
 
+            <!-- Reflection Progress Display -->
+            <%= if @reflection_processing do %>
+              <div class="card bg-base-100 shadow-xl border-2 border-secondary">
+                <div class="card-body">
+                  <div class="flex justify-between items-center mb-4">
+                    <h2 class="card-title">
+                      <span class="hero-arrow-path w-6 h-6 text-secondary animate-spin"></span>
+                      AI Reflection in Progress
+                    </h2>
+                    <button
+                      phx-click="cancel_reflection"
+                      class="btn btn-ghost btn-sm btn-square"
+                      aria-label="Cancel reflection"
+                    >
+                      <span class="hero-x-mark w-5 h-5"></span>
+                    </button>
+                  </div>
+
+                  <p class="text-sm text-base-content/70 mb-4">
+                    The AI is analyzing and improving the domain configuration through iterative reflection.
+                  </p>
+
+                  <div class="space-y-4">
+                    <!-- Progress Header -->
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-3">
+                        <span class="loading loading-spinner loading-md text-secondary"></span>
+                        <div class="flex-1">
+                          <h3 class="font-semibold text-base-content">
+                            <%= case @reflection_stage do %>
+                              <% :initializing -> %> Initializing Reflection
+                              <% :evaluation -> %> Evaluating Configuration
+                              <% :feedback_generation -> %> Generating Feedback
+                              <% :refinement -> %> Applying Improvements
+                              <% :validation -> %> Validating Changes
+                              <% :iteration_check -> %> Checking Iteration
+                              <% :finalizing -> %> Finalizing Results
+                              <% _ -> %> Processing
+                            <% end %>
+                          </h3>
+                          <p class="text-sm text-base-content/60">
+                            <%= @reflection_message || "Working on improvements..." %>
+                          </p>
+                        </div>
+                      </div>
+                      <div class="text-right">
+                        <div class="text-lg font-bold text-secondary">
+                          <%= @reflection_progress || 0 %>%
+                        </div>
+                        <%= if @reflection_iteration > 0 do %>
+                          <div class="text-xs text-base-content/50">
+                            Iteration <%= @reflection_iteration %>/<%= @reflection_max_iterations %>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="w-full space-y-2">
+                      <progress
+                        class="progress progress-secondary w-full h-4"
+                        value={@reflection_progress || 0}
+                        max="100"
+                      ></progress>
+                      <div class="flex justify-between text-xs text-base-content/50">
+                        <span>Reflecting...</span>
+                        <span>
+                          <%= case @reflection_stage do %>
+                            <% stage when stage in [:initializing, :evaluation] -> %> Analyzing quality
+                            <% stage when stage in [:feedback_generation, :refinement] -> %> Improving configuration
+                            <% stage when stage in [:validation, :iteration_check] -> %> Validating improvements
+                            <% :finalizing -> %> Completing process
+                            <% _ -> %> Processing
+                          <% end %>
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- Reflection Stages -->
+                    <div class="bg-base-200/30 rounded-lg p-4 border border-base-300">
+                      <div class="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+                        <div class={"step transition-all duration-300 #{if @reflection_progress >= 25, do: "text-secondary font-semibold", else: "text-base-content/40"}"}>
+                          <div class="flex items-center gap-2 p-2 rounded">
+                            <%= if @reflection_progress >= 25 do %>
+                              <span class="hero-check-circle w-4 h-4 text-success"></span>
+                            <% else %>
+                              <%= if @reflection_stage in [:initializing, :evaluation] do %>
+                                <span class="loading loading-spinner loading-xs text-secondary"></span>
+                              <% else %>
+                                <span class="hero-clock w-4 h-4"></span>
+                              <% end %>
+                            <% end %>
+                            <div>
+                              <div class="font-medium">Evaluate</div>
+                              <div class="text-xs opacity-70">Quality assessment</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div class={"step transition-all duration-300 #{if @reflection_progress >= 50, do: "text-secondary font-semibold", else: "text-base-content/40"}"}>
+                          <div class="flex items-center gap-2 p-2 rounded">
+                            <%= if @reflection_progress >= 50 do %>
+                              <span class="hero-check-circle w-4 h-4 text-success"></span>
+                            <% else %>
+                              <%= if @reflection_stage in [:feedback_generation] do %>
+                                <span class="loading loading-spinner loading-xs text-secondary"></span>
+                              <% else %>
+                                <span class="hero-clock w-4 h-4"></span>
+                              <% end %>
+                            <% end %>
+                            <div>
+                              <div class="font-medium">Generate Feedback</div>
+                              <div class="text-xs opacity-70">Improvement suggestions</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div class={"step transition-all duration-300 #{if @reflection_progress >= 75, do: "text-secondary font-semibold", else: "text-base-content/40"}"}>
+                          <div class="flex items-center gap-2 p-2 rounded">
+                            <%= if @reflection_progress >= 75 do %>
+                              <span class="hero-check-circle w-4 h-4 text-success"></span>
+                            <% else %>
+                              <%= if @reflection_stage in [:refinement] do %>
+                                <span class="loading loading-spinner loading-xs text-secondary"></span>
+                              <% else %>
+                                <span class="hero-clock w-4 h-4"></span>
+                              <% end %>
+                            <% end %>
+                            <div>
+                              <div class="font-medium">Refine</div>
+                              <div class="text-xs opacity-70">Apply improvements</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div class={"step transition-all duration-300 #{if @reflection_progress >= 100, do: "text-success font-semibold", else: "text-base-content/40"}"}>
+                          <div class="flex items-center gap-2 p-2 rounded">
+                            <%= if @reflection_progress >= 100 do %>
+                              <span class="hero-check-circle w-4 h-4 text-success"></span>
+                            <% else %>
+                              <%= if @reflection_stage in [:validation, :finalizing] do %>
+                                <span class="loading loading-spinner loading-xs text-secondary"></span>
+                              <% else %>
+                                <span class="hero-clock w-4 h-4"></span>
+                              <% end %>
+                            <% end %>
+                            <div>
+                              <div class="font-medium">Complete</div>
+                              <div class="text-xs opacity-70">Ready for review</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            <% end %>
+
+            <!-- Reflection Results Display -->
+            <%= if @reflection_result do %>
+              <div class="card bg-base-100 shadow-xl border-2 border-success">
+                <div class="card-body">
+                  <div class="flex justify-between items-center mb-4">
+                    <h2 class="card-title">
+                      <span class="hero-check-circle w-6 h-6 text-success"></span>
+                      Reflection Complete
+                    </h2>
+                    <button
+                      phx-click="dismiss_reflection_result"
+                      class="btn btn-ghost btn-sm btn-square"
+                      aria-label="Dismiss reflection result"
+                    >
+                      <span class="hero-x-mark w-5 h-5"></span>
+                    </button>
+                  </div>
+
+                  <% summary = DecisionEngine.ReflectionResult.extract_summary(@reflection_result) %>
+
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="stat bg-base-200/50 rounded-lg">
+                      <div class="stat-title">Quality Improvement</div>
+                      <div class="stat-value text-lg text-success">
+                        +<%= summary.improvement_percentage %>%
+                      </div>
+                      <div class="stat-desc">
+                        <%= summary.original_quality %> → <%= summary.refined_quality %>
+                      </div>
+                    </div>
+
+                    <div class="stat bg-base-200/50 rounded-lg">
+                      <div class="stat-title">Processing Time</div>
+                      <div class="stat-value text-lg text-info">
+                        <%= summary.processing_time_seconds %>s
+                      </div>
+                      <div class="stat-desc">
+                        <%= summary.iterations_performed %> iteration<%= if summary.iterations_performed != 1, do: "s" %>
+                      </div>
+                    </div>
+
+                    <div class="stat bg-base-200/50 rounded-lg">
+                      <div class="stat-title">Improvements</div>
+                      <div class="stat-value text-lg text-secondary">
+                        <%= length(summary.top_improvement_areas) %>
+                      </div>
+                      <div class="stat-desc">areas enhanced</div>
+                    </div>
+                  </div>
+
+                  <%= if length(summary.top_improvement_areas) > 0 do %>
+                    <div class="mb-4">
+                      <h3 class="font-semibold mb-2">Key Improvements:</h3>
+                      <div class="flex flex-wrap gap-2">
+                        <%= for area <- summary.top_improvement_areas do %>
+                          <div class="badge badge-success badge-outline">
+                            <%= area %>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+                  <% end %>
+
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      phx-click="apply_reflection_result"
+                      class="btn btn-success"
+                    >
+                      <span class="hero-check w-5 h-5"></span>
+                      Apply Improvements
+                    </button>
+
+                    <button
+                      phx-click="toggle_reflection_comparison"
+                      class="btn btn-info btn-outline"
+                    >
+                      <span class="hero-eye w-5 h-5"></span>
+                      <%= if @show_reflection_comparison, do: "Hide", else: "View" %> Comparison
+                    </button>
+                  </div>
+
+                  <!-- Comparison View -->
+                  <%= if @show_reflection_comparison do %>
+                    <div class="divider">Configuration Comparison</div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <!-- Original Configuration -->
+                      <div class="space-y-4">
+                        <h4 class="font-semibold text-base-content/80 flex items-center gap-2">
+                          <span class="hero-document w-4 h-4"></span>
+                          Original Configuration
+                        </h4>
+                        <div class="bg-base-200/30 rounded-lg p-4 border border-base-300">
+                          <.reflection_config_preview config={@reflection_result.original_config} />
+                        </div>
+                      </div>
+
+                      <!-- Refined Configuration -->
+                      <div class="space-y-4">
+                        <h4 class="font-semibold text-success flex items-center gap-2">
+                          <span class="hero-sparkles w-4 h-4"></span>
+                          Refined Configuration
+                        </h4>
+                        <div class="bg-success/10 rounded-lg p-4 border border-success/20">
+                          <.reflection_config_preview config={@reflection_result.refined_config} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Quality Comparison -->
+                    <div class="mt-6">
+                      <h4 class="font-semibold mb-4">Quality Metrics Comparison</h4>
+                      <% quality_comparison = DecisionEngine.ReflectionResult.compare_quality_dimensions(@reflection_result) %>
+
+                      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <%= for {dimension, data} <- quality_comparison do %>
+                          <div class="bg-base-200/30 rounded-lg p-3 border border-base-300">
+                            <div class="text-sm font-semibold capitalize mb-2"><%= dimension %></div>
+                            <div class="flex items-center justify-between text-xs">
+                              <span class="text-base-content/60"><%= data.original %></span>
+                              <span class="hero-arrow-right w-3 h-3 text-base-content/40"></span>
+                              <span class={"font-semibold #{if data.improved, do: "text-success", else: "text-base-content"}"}>
+                                <%= data.refined %>
+                              </span>
+                            </div>
+                            <%= if data.improved do %>
+                              <div class="text-xs text-success mt-1">
+                                +<%= Float.round(data.change * 100, 1) %>%
+                              </div>
+                            <% end %>
+                          </div>
+                        <% end %>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+
+            <!-- Reflection Error Display -->
+            <%= if @reflection_error do %>
+              <div class="alert alert-error shadow-lg animate-fade-in">
+                <span class="hero-exclamation-triangle w-6 h-6 flex-shrink-0"></span>
+                <div class="flex-1">
+                  <h3 class="font-bold">Reflection Failed</h3>
+                  <p class="text-sm"><%= @reflection_error %></p>
+                </div>
+                <button
+                  phx-click="dismiss_reflection_result"
+                  class="btn btn-ghost btn-sm btn-square"
+                  title="Dismiss error"
+                >
+                  <span class="hero-x-mark w-4 h-4"></span>
+                </button>
+              </div>
+            <% end %>
+
             <!-- Enhanced Domains Grid with Decision Tables -->
             <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
               <%= for domain <- @domains do %>
@@ -1605,6 +2726,23 @@ defmodule DecisionEngineWeb.DomainManagementLive do
                               <span class="hero-pencil w-4 h-4"></span>
                               Edit Domain
                             </button>
+                          </li>
+                          <li>
+                            <%= if @reflection_processing do %>
+                              <div class="flex items-center gap-2 text-secondary px-3 py-2">
+                                <span class="loading loading-spinner loading-xs"></span>
+                                <span class="text-sm">Reflecting...</span>
+                              </div>
+                            <% else %>
+                              <button
+                                phx-click="start_reflection"
+                                phx-value-domain={domain.name}
+                                class="flex items-center gap-2 text-secondary"
+                              >
+                                <span class="hero-arrow-path w-4 h-4"></span>
+                                Improve with AI
+                              </button>
+                            <% end %>
                           </li>
                           <li>
                             <%= if @generating_description == String.to_atom(domain.name) do %>
@@ -2087,6 +3225,318 @@ defmodule DecisionEngineWeb.DomainManagementLive do
           </div>
         <% end %>
       </div>
+
+      <!-- Reflection Configuration Modal -->
+      <%= if @show_reflection_config do %>
+        <div class="modal modal-open">
+          <div class="modal-box max-w-4xl">
+            <div class="flex justify-between items-center mb-6">
+              <h3 class="font-bold text-xl">
+                <span class="hero-cog-6-tooth w-6 h-6 inline-block mr-2 text-secondary"></span>
+                Reflection Configuration
+              </h3>
+              <button
+                phx-click="hide_reflection_config"
+                class="btn btn-ghost btn-sm btn-square"
+                aria-label="Close configuration"
+              >
+                <span class="hero-x-mark w-5 h-5"></span>
+              </button>
+            </div>
+
+            <p class="text-sm text-base-content/70 mb-6">
+              Configure the AI reflection system parameters to control quality vs. performance trade-offs.
+              Reflection automatically improves domain configurations through iterative analysis.
+            </p>
+
+            <%= if @reflection_config_loading do %>
+              <div class="flex items-center justify-center py-12">
+                <span class="loading loading-spinner loading-lg text-secondary"></span>
+                <span class="ml-3 text-base-content/70">Loading configuration...</span>
+              </div>
+            <% else %>
+              <%= if length(@reflection_config_errors) > 0 do %>
+                <div class="alert alert-error mb-6">
+                  <span class="hero-exclamation-triangle w-5 h-5"></span>
+                  <div>
+                    <h4 class="font-bold">Configuration Errors</h4>
+                    <ul class="text-sm mt-1">
+                      <%= for error <- @reflection_config_errors do %>
+                        <li>• <%= error %></li>
+                      <% end %>
+                    </ul>
+                  </div>
+                </div>
+              <% end %>
+
+              <%= if @reflection_config do %>
+                <form phx-submit="save_reflection_config" class="space-y-6">
+                  <!-- Basic Settings -->
+                  <div class="card bg-base-100 border border-base-200">
+                    <div class="card-body">
+                      <h4 class="card-title text-lg">
+                        <span class="hero-toggle-left w-5 h-5 text-primary"></span>
+                        Basic Settings
+                      </h4>
+
+                      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="form-control">
+                          <label class="label cursor-pointer">
+                            <span class="label-text font-semibold">Enable Reflection</span>
+                            <input
+                              type="checkbox"
+                              name="config[enabled]"
+                              class="toggle toggle-primary"
+                              checked={@reflection_config.enabled}
+                              value="true"
+                            />
+                          </label>
+                          <label class="label">
+                            <span class="label-text-alt">Automatically improve domain configurations using AI reflection</span>
+                          </label>
+                        </div>
+
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Max Iterations</span>
+                          </label>
+                          <select name="config[max_iterations]" class="select select-bordered">
+                            <%= for i <- 1..5 do %>
+                              <option value={i} selected={@reflection_config.max_iterations == i}>
+                                <%= i %> iteration<%= if i > 1, do: "s" %>
+                              </option>
+                            <% end %>
+                          </select>
+                          <label class="label">
+                            <span class="label-text-alt">Maximum number of reflection cycles (1-5)</span>
+                          </label>
+                        </div>
+
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Quality Threshold</span>
+                          </label>
+                          <div class="flex items-center gap-3">
+                            <input
+                              type="range"
+                              name="config[quality_threshold]"
+                              min="0.0"
+                              max="1.0"
+                              step="0.05"
+                              class="range range-primary flex-1"
+                              value={@reflection_config.quality_threshold}
+                            />
+                            <div class="badge badge-primary font-mono">
+                              <%= Float.round(@reflection_config.quality_threshold, 2) %>
+                            </div>
+                          </div>
+                          <label class="label">
+                            <span class="label-text-alt">Minimum quality score to stop reflection early</span>
+                          </label>
+                        </div>
+
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Timeout (minutes)</span>
+                          </label>
+                          <input
+                            type="number"
+                            name="config[timeout_ms]"
+                            class="input input-bordered"
+                            min="1"
+                            max="30"
+                            value={div(@reflection_config.timeout_ms, 60000)}
+                          />
+                          <label class="label">
+                            <span class="label-text-alt">Maximum time for reflection process (1-30 minutes)</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Quality Weights -->
+                  <div class="card bg-base-100 border border-base-200">
+                    <div class="card-body">
+                      <h4 class="card-title text-lg">
+                        <span class="hero-scale w-5 h-5 text-secondary"></span>
+                        Quality Weights
+                      </h4>
+                      <p class="text-sm text-base-content/70 mb-4">
+                        Adjust the importance of different quality dimensions. Weights must sum to 1.0.
+                      </p>
+
+                      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Completeness</span>
+                            <span class="badge badge-outline"><%= Float.round(@reflection_config.quality_weights.completeness * 100, 0) %>%</span>
+                          </label>
+                          <input
+                            type="range"
+                            name="config[weight_completeness]"
+                            min="0.0"
+                            max="1.0"
+                            step="0.05"
+                            class="range range-secondary"
+                            value={@reflection_config.quality_weights.completeness}
+                          />
+                          <label class="label">
+                            <span class="label-text-alt">Coverage of domain requirements</span>
+                          </label>
+                        </div>
+
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Accuracy</span>
+                            <span class="badge badge-outline"><%= Float.round(@reflection_config.quality_weights.accuracy * 100, 0) %>%</span>
+                          </label>
+                          <input
+                            type="range"
+                            name="config[weight_accuracy]"
+                            min="0.0"
+                            max="1.0"
+                            step="0.05"
+                            class="range range-secondary"
+                            value={@reflection_config.quality_weights.accuracy}
+                          />
+                          <label class="label">
+                            <span class="label-text-alt">Correctness of extracted rules</span>
+                          </label>
+                        </div>
+
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Consistency</span>
+                            <span class="badge badge-outline"><%= Float.round(@reflection_config.quality_weights.consistency * 100, 0) %>%</span>
+                          </label>
+                          <input
+                            type="range"
+                            name="config[weight_consistency]"
+                            min="0.0"
+                            max="1.0"
+                            step="0.05"
+                            class="range range-secondary"
+                            value={@reflection_config.quality_weights.consistency}
+                          />
+                          <label class="label">
+                            <span class="label-text-alt">Internal logical coherence</span>
+                          </label>
+                        </div>
+
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Usability</span>
+                            <span class="badge badge-outline"><%= Float.round(@reflection_config.quality_weights.usability * 100, 0) %>%</span>
+                          </label>
+                          <input
+                            type="range"
+                            name="config[weight_usability]"
+                            min="0.0"
+                            max="1.0"
+                            step="0.05"
+                            class="range range-secondary"
+                            value={@reflection_config.quality_weights.usability}
+                          />
+                          <label class="label">
+                            <span class="label-text-alt">Practical applicability</span>
+                          </label>
+                        </div>
+                      </div>
+
+                      <!-- Weight Sum Indicator -->
+                      <% total_weight = @reflection_config.quality_weights.completeness + @reflection_config.quality_weights.accuracy + @reflection_config.quality_weights.consistency + @reflection_config.quality_weights.usability %>
+                      <% weight_valid = abs(total_weight - 1.0) <= 0.01 %>
+                      <div class={"mt-4 p-3 rounded-lg #{if weight_valid, do: "bg-success/10 border border-success/20", else: "bg-warning/10 border border-warning/20"}"}>
+                        <div class="flex items-center justify-between">
+                          <span class="text-sm font-semibold">Total Weight:</span>
+                          <span class={"badge font-mono #{if weight_valid, do: "badge-success", else: "badge-warning"}"}>
+                            <%= Float.round(total_weight, 3) %>
+                          </span>
+                        </div>
+                        <%= if not weight_valid do %>
+                          <p class="text-xs text-warning mt-1">
+                            ⚠️ Weights should sum to 1.0 for optimal results
+                          </p>
+                        <% end %>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Custom Prompts -->
+                  <div class="card bg-base-100 border border-base-200">
+                    <div class="card-body">
+                      <h4 class="card-title text-lg">
+                        <span class="hero-chat-bubble-left-right w-5 h-5 text-info"></span>
+                        Custom Prompts
+                      </h4>
+                      <p class="text-sm text-base-content/70 mb-4">
+                        Override default AI prompts for evaluation and refinement. Leave empty to use system defaults.
+                      </p>
+
+                      <div class="space-y-4">
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Evaluation Prompt</span>
+                          </label>
+                          <textarea
+                            name="config[evaluation_prompt]"
+                            class="textarea textarea-bordered h-24"
+                            placeholder="Custom prompt for domain configuration evaluation (optional)"
+                          ><%= @reflection_config.custom_prompts.evaluation || "" %></textarea>
+                          <label class="label">
+                            <span class="label-text-alt">Instructions for the AI when evaluating domain quality</span>
+                          </label>
+                        </div>
+
+                        <div class="form-control">
+                          <label class="label">
+                            <span class="label-text font-semibold">Refinement Prompt</span>
+                          </label>
+                          <textarea
+                            name="config[refinement_prompt]"
+                            class="textarea textarea-bordered h-24"
+                            placeholder="Custom prompt for domain configuration refinement (optional)"
+                          ><%= @reflection_config.custom_prompts.refinement || "" %></textarea>
+                          <label class="label">
+                            <span class="label-text-alt">Instructions for the AI when applying improvements</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Actions -->
+                  <div class="modal-action">
+                    <button
+                      type="button"
+                      phx-click="reset_reflection_config"
+                      class="btn btn-ghost"
+                    >
+                      <span class="hero-arrow-path w-5 h-5"></span>
+                      Reset to Defaults
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="hide_reflection_config"
+                      class="btn btn-ghost"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      class="btn btn-primary"
+                    >
+                      <span class="hero-check w-5 h-5"></span>
+                      Save Configuration
+                    </button>
+                  </div>
+                </form>
+              <% end %>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
 
       <!-- Delete Confirmation Modal -->
       <%= if @show_delete_modal do %>

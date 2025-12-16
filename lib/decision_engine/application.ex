@@ -5,6 +5,9 @@ defmodule DecisionEngine.Application do
 
   @impl true
   def start(_type, _args) do
+    # Initialize streaming session storage
+    DecisionEngine.StreamingInterface.init_session_storage()
+
     children = [
       # Start Finch for HTTP client streaming support
       {Finch, name: DecisionEngine.Finch},
@@ -22,6 +25,22 @@ defmodule DecisionEngine.Application do
       DecisionEngine.LLMConfigManager,
       # Start the StreamingHandler for real-time LLM response streaming
       DecisionEngine.StreamingHandler,
+      # Start the ReflectionConfig for reflection system configuration
+      DecisionEngine.ReflectionConfig,
+      # Start the ReflectionMetrics for reflection system metrics tracking
+      DecisionEngine.ReflectionMetrics,
+      # Start the ReflectionProgressTracker for reflection progress tracking
+      DecisionEngine.ReflectionProgressTracker,
+      # Start the ReflectionCancellationManager for reflection cancellation handling
+      DecisionEngine.ReflectionCancellationManager,
+      # Start the ReflectionQueueManager for concurrent reflection processing
+      DecisionEngine.ReflectionQueueManager,
+      # Start the StreamingPerformanceMonitor for streaming metrics tracking
+      DecisionEngine.StreamingPerformanceMonitor,
+      # Start the StreamingErrorHandler for enhanced error handling and recovery
+      DecisionEngine.StreamingErrorHandler,
+      # Start the StreamingBackpressureHandler for flow control and backpressure management
+      DecisionEngine.StreamingBackpressureHandler,
       # Start the endpoint so the web interface is available
       DecisionEngineWeb.Endpoint
     ]

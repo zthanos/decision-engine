@@ -1,9 +1,9 @@
 {
   "llm_config": {
-    "created_at": "2025-12-14T09:43:50.349470Z",
+    "created_at": "2025-12-16T02:41:28.086529Z",
     "endpoint": "http://host.docker.internal:1234/v1/chat/completions",
     "max_tokens": 2000,
-    "model": "deepseek-coder-v2-lite-instruct",
+    "model": "openai/gpt-oss-20b",
     "provider": "lm_studio",
     "streaming": true,
     "temperature": 0.7,

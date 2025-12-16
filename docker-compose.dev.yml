@@ -12,6 +12,12 @@ services:
       - PHX_HOST=0.0.0.0
       - PHX_PORT=4000
       - PHX_LIVE_RELOAD_URL=ws://localhost:4000/phoenix/live_reload/socket/websocket
+      # LM Studio configuration for testing
+      - LLM_PROVIDER=${LLM_PROVIDER:-lmstudio}
+      - LLM_ENDPOINT=${LLM_ENDPOINT:-http://host.docker.internal:1234}
+      - LLM_MODEL=${LLM_MODEL:-local-model}
+      - LLM_TIMEOUT=${LLM_TIMEOUT:-300000}
+      - DOCKER_TEST=${DOCKER_TEST:-false}
     volumes:
       # Mount source code for live reloading
       - .:/app

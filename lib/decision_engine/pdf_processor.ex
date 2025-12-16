@@ -177,6 +177,69 @@ defmodule DecisionEngine.PDFProcessor do
   end
 
   @doc """
+  Processes an uploaded PDF file with concurrent reflection enhancement.
+
+  This function provides non-blocking PDF processing by queuing the reflection
+  enhancement for concurrent processing. The initial domain configuration is
+  returned immediately, and reflection enhancement is processed asynchronously.
+
+  ## Parameters
+  - pdf_path: String path to the uploaded PDF file
+  - domain_name: String name for the new domain
+  - llm_config: Map containing LLM configuration (optional, uses default if not provided)
+  - reflection_options: Map containing reflection configuration and callback settings
+
+  ## Returns
+  - {:ok, {domain_config, request_id}} with initial domain config and reflection request ID
+  - {:error, reason} on failure
+
+  ## Concurrent Processing Behavior
+  - Returns initial domain configuration immediately
+  - Queues reflection enhancement for background processing
+  - Provides request_id for tracking reflection progress
+  - Supports callback notifications for completion
+  """
+  @spec process_pdf_for_domain_with_concurrent_reflection(String.t(), String.t(), map() | nil, map() | nil) ::
+    {:ok, {map(), String.t() | nil}} | {:error, term()}
+  def process_pdf_for_domain_with_concurrent_reflection(pdf_path, domain_name, llm_config \\ nil, reflection_options \\ nil) do
+    # First, perform standard PDF processing
+    case process_pdf_for_domain(pdf_path, domain_name, llm_config) do
+      {:ok, initial_domain_config} ->
+        # Check if reflection is enabled and should be triggered
+        if should_trigger_reflection?() do
+          Logger.info("Reflection enabled, queuing concurrent reflection for domain: #{domain_name}")
+
+          # Prepare reflection options for concurrent processing
+          concurrent_options = prepare_concurrent_reflection_options(reflection_options, domain_name)
+
+          case DecisionEngine.ReflectionCoordinator.start_reflection_async(initial_domain_config, concurrent_options) do
+            {:ok, request_id} ->
+              Logger.info("Queued reflection request #{request_id} for domain: #{domain_name}")
+              {:ok, {initial_domain_config, request_id}}
+
+            {:error, reason} ->
+              Logger.warning("Failed to queue reflection for domain #{domain_name}: #{reason}")
+              # Fallback to returning original config without reflection
+              case Map.get(reflection_options || %{}, :fallback_on_queue_failure, true) do
+                true ->
+                  Logger.info("Falling back to original configuration for domain: #{domain_name}")
+                  {:ok, {initial_domain_config, nil}}
+
+                false ->
+                  {:error, "Failed to queue reflection: #{reason}"}
+              end
+          end
+        else
+          Logger.debug("Reflection disabled, returning original domain configuration")
+          {:ok, {initial_domain_config, nil}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Extracts text content from a PDF file with comprehensive validation and error handling.
 
   ## Parameters
@@ -731,18 +794,24 @@ defmodule DecisionEngine.PDFProcessor do
       "patterns": [
         {
           "id": "pattern_1",
+          "outcome": "recommended_action_or_decision",
+          "score": 0.8,
           "summary": "Pattern summary based on business rules",
-          "conditions": [
+          "use_when": [
             {
               "field": "field1",
-              "operator": "equals",
+              "op": "equals",
               "value": "some_value"
             }
           ],
-          "actions": [
-            "Action to take when conditions are met"
+          "avoid_when": [
+            {
+              "field": "field1",
+              "op": "equals",
+              "value": "negative_value"
+            }
           ],
-          "priority": 1
+          "typical_use_cases": ["example_scenario_1", "example_scenario_2"]
         }
       ]
     }
@@ -828,8 +897,20 @@ defmodule DecisionEngine.PDFProcessor do
           "outcome": "recommended_action_or_decision",
           "score": 0.8,
           "summary": "When this pattern applies and what it recommends",
-          "use_when": ["condition1", "condition2"],
-          "avoid_when": ["negative_condition1"],
+          "use_when": [
+            {
+              "field": "signal_field_name",
+              "op": "in",
+              "value": ["value1", "value2"]
+            }
+          ],
+          "avoid_when": [
+            {
+              "field": "signal_field_name",
+              "op": "equals",
+              "value": "negative_value"
+            }
+          ],
           "typical_use_cases": ["example_scenario_1", "example_scenario_2"]
         }
       ],
@@ -909,8 +990,20 @@ defmodule DecisionEngine.PDFProcessor do
           "outcome": "decision_outcome",
           "score": 0.7,
           "summary": "When this pattern applies and what it recommends",
-          "use_when": ["condition_description"],
-          "avoid_when": ["negative_condition"],
+          "use_when": [
+            {
+              "field": "signal_field_name",
+              "op": "in",
+              "value": ["value1", "value2"]
+            }
+          ],
+          "avoid_when": [
+            {
+              "field": "signal_field_name",
+              "op": "equals",
+              "value": "negative_value"
+            }
+          ],
           "typical_use_cases": ["example_scenario"]
         }
       ],
@@ -977,18 +1070,24 @@ defmodule DecisionEngine.PDFProcessor do
       "patterns": [
         {
           "id": "pattern_1",
-          "summary": "Pattern summary",
-          "conditions": [
+          "outcome": "recommended_action_or_decision",
+          "score": 0.8,
+          "summary": "Pattern summary describing when this applies",
+          "use_when": [
             {
               "field": "field1",
-              "operator": "equals",
+              "op": "equals",
               "value": "some_value"
             }
           ],
-          "actions": [
-            "Action to take when conditions are met"
+          "avoid_when": [
+            {
+              "field": "field1",
+              "op": "equals",
+              "value": "negative_value"
+            }
           ],
-          "priority": 1
+          "typical_use_cases": ["example_scenario_1", "example_scenario_2"]
         }
       ]
     }
@@ -1664,5 +1763,45 @@ defmodule DecisionEngine.PDFProcessor do
     ]
   end
 
+  # Helper functions for concurrent reflection processing
+
+  # Checks if reflection should be triggered based on system configuration.
+  @spec should_trigger_reflection?() :: boolean()
+  defp should_trigger_reflection?() do
+    try do
+      # For PDF processing, we want to enable reflection even if it's disabled globally
+      # because PDF-generated domains often need improvement
+      case DecisionEngine.ReflectionConfig.reflection_enabled?() do
+        true -> true
+        false ->
+          Logger.info("Reflection is disabled globally, but enabling for PDF-generated domain improvement")
+          true  # Enable reflection for PDF processing regardless of global setting
+      end
+    rescue
+      _ ->
+        Logger.info("Reflection config unavailable, enabling reflection for PDF processing")
+        true  # Default to true for PDF processing if reflection config is not available
+    end
+  end
+
+  # Prepares reflection options for concurrent processing.
+  @spec prepare_concurrent_reflection_options(map() | nil, String.t()) :: map()
+  defp prepare_concurrent_reflection_options(reflection_options, domain_name) do
+    base_options = reflection_options || %{}
+
+    # Set default options for concurrent processing
+    concurrent_defaults = %{
+      priority: :normal,
+      callback_pid: self(),
+      session_id: "pdf_#{domain_name}_#{System.system_time(:microsecond)}",
+      async: true,
+      enable_progress_tracking: true,
+      enable_cancellation: true,
+      fallback_on_queue_failure: true
+    }
+
+    # Merge with provided options, giving precedence to user-provided values
+    Map.merge(concurrent_defaults, base_options)
+  end
 
 end

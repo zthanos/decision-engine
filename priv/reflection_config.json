@@ -1,0 +1,20 @@
+{
+  "reflection_config": {
+    "custom_prompts": {
+      "evaluation": null,
+      "refinement": null
+    },
+    "enabled": true,
+    "max_iterations": 3,
+    "quality_threshold": 0.75,
+    "quality_weights": {
+      "completeness": 0.3,
+      "accuracy": 0.25,
+      "consistency": 0.25,
+      "usability": 0.2
+    },
+    "timeout_ms": 300000,
+    "updated_at": "2025-12-14T14:58:32.622341Z",
+    "version": "1.0"
+  }
+}

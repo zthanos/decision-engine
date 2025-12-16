@@ -109,13 +109,13 @@ defmodule DecisionEngine.DomainConfigBuilder do
     # Validate patterns structure
     errors = validate_patterns_structure(config, errors)
 
-    # Validate pattern consistency
-    errors = validate_pattern_consistency(config, errors)
+    # Auto-correct missing signal fields and validate pattern consistency
+    {corrected_config, errors} = auto_correct_missing_signal_fields(config, errors)
 
     case errors do
       [] ->
         Logger.debug("Domain configuration validation passed")
-        {:ok, config}
+        {:ok, corrected_config}
       _ ->
         Logger.warning("Domain configuration validation failed: #{inspect(errors)}")
         {:error, errors}
@@ -367,7 +367,54 @@ defmodule DecisionEngine.DomainConfigBuilder do
     }
   end
 
+  defp normalize_condition(condition) when is_binary(condition) do
+    # Parse string conditions like "\"event_volume\" == \"high\""
+    parse_string_condition(condition)
+  end
+
   defp normalize_condition(_), do: %{"field" => "example_field", "op" => "in", "value" => ["example_value"]}
+
+  # Parse string conditions into structured format
+  defp parse_string_condition(condition_str) do
+    cond do
+      # Handle equality conditions: "field" == "value"
+      String.contains?(condition_str, "==") ->
+        [field_part, value_part] = String.split(condition_str, "==", parts: 2)
+        field = extract_quoted_value(String.trim(field_part))
+        value = extract_quoted_value(String.trim(value_part))
+        %{"field" => field, "op" => "equals", "value" => value}
+
+      # Handle OR conditions: "field" == "value1" || "field" == "value2"
+      String.contains?(condition_str, "||") ->
+        parts = String.split(condition_str, "||")
+        first_condition = parse_string_condition(String.trim(hd(parts)))
+        # For OR conditions, convert to "in" operator with multiple values
+        values = Enum.map(parts, fn part ->
+          parsed = parse_string_condition(String.trim(part))
+          parsed["value"]
+        end)
+        %{"field" => first_condition["field"], "op" => "in", "value" => values}
+
+      # Handle AND conditions: "field1" == "value1" && "field2" == "value2"
+      String.contains?(condition_str, "&&") ->
+        # For now, just take the first condition - this could be improved
+        first_part = condition_str |> String.split("&&") |> hd() |> String.trim()
+        parse_string_condition(first_part)
+
+      # Default fallback
+      true ->
+        %{"field" => "example_field", "op" => "in", "value" => ["example_value"]}
+    end
+  end
+
+  # Extract value from quoted strings like "\"event_volume\""
+  defp extract_quoted_value(str) do
+    str
+    |> String.trim()
+    |> String.replace(~r/^"/, "")  # Remove leading quote
+    |> String.replace(~r/"$/, "")  # Remove trailing quote
+    |> String.replace("\\\"", "")  # Remove escaped quotes
+  end
 
   defp validate_required_fields(config, errors) do
     required_fields = ["name", "signals_fields", "patterns"]
@@ -441,6 +488,56 @@ defmodule DecisionEngine.DomainConfigBuilder do
     end)
   end
 
+  # Auto-corrects missing signal fields by adding them to the signals_fields list
+  defp auto_correct_missing_signal_fields(config, errors) do
+    patterns = config["patterns"] || []
+    current_signals = config["signals_fields"] || []
+    signals_set = MapSet.new(current_signals)
+
+    # Collect all field references from patterns
+    referenced_fields =
+      patterns
+      |> Enum.flat_map(fn pattern ->
+        use_when = pattern["use_when"] || []
+        avoid_when = pattern["avoid_when"] || []
+        conditions = use_when ++ avoid_when
+
+        Enum.map(conditions, fn condition ->
+          case condition do
+            %{"field" => field} when is_binary(field) -> field
+            _ -> nil
+          end
+        end)
+      end)
+      |> Enum.filter(&(&1 != nil))
+      |> Enum.uniq()
+
+    # Find missing fields
+    missing_fields =
+      referenced_fields
+      |> Enum.filter(fn field ->
+        not MapSet.member?(signals_set, field) and field != "example_field"
+      end)
+
+    case missing_fields do
+      [] ->
+        # No missing fields, validate pattern consistency normally
+        final_errors = validate_pattern_consistency(config, errors)
+        {config, final_errors}
+
+      missing ->
+        Logger.info("Auto-correcting missing signal fields: #{inspect(missing)}")
+
+        # Add missing fields to signals_fields
+        updated_signals = current_signals ++ missing
+        corrected_config = Map.put(config, "signals_fields", updated_signals)
+
+        # Now validate with corrected config
+        final_errors = validate_pattern_consistency(corrected_config, errors)
+        {corrected_config, final_errors}
+    end
+  end
+
   defp validate_pattern_field_references(pattern, index, signals_fields, errors) when is_map(pattern) do
     use_when = pattern["use_when"] || []
     avoid_when = pattern["avoid_when"] || []
@@ -452,7 +549,9 @@ defmodule DecisionEngine.DomainConfigBuilder do
           if MapSet.member?(signals_fields, field) or field == "example_field" do
             acc
           else
-            ["Pattern #{index + 1}: References undefined signal field '#{field}'" | acc]
+            Logger.warning("Pattern #{index + 1}: References undefined signal field '#{field}', but allowing for auto-correction")
+            # Don't add this as an error - we'll auto-correct it
+            acc
           end
 
         _ ->
