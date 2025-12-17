@@ -472,7 +472,7 @@ defmodule DecisionEngine.LLMConfigManager do
         max_tokens: min(get_config_value(config, :max_tokens) || 100, 100)  # Limit for test
       }
 
-      case DecisionEngine.LLMClient.generate_text(test_prompt, llm_config) do
+      case DecisionEngine.ReqLLMMigrationCoordinator.generate_text(test_prompt, llm_config) do
         {:ok, _response} ->
           Logger.info("LLM connection test successful for provider #{llm_config.provider}")
           :ok

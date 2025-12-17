@@ -301,8 +301,8 @@ defmodule DecisionEngine.DescriptionGenerator do
   end
 
   defp call_llm_for_description(prompt, config) do
-    # Pass config to LLMClient which will handle unified configuration
-    case DecisionEngine.LLMClient.generate_text(prompt, config) do
+    # Pass config to ReqLLMMigrationCoordinator which will handle routing
+    case DecisionEngine.ReqLLMMigrationCoordinator.generate_text(prompt, config) do
       {:ok, response} ->
         {:ok, response}
       {:error, reason} ->

@@ -201,7 +201,7 @@ defmodule DecisionEngine do
   end
 
   defp extract_domain_signals(scenario, config, domain, schema_module, rule_config) do
-    case DecisionEngine.LLMClient.extract_signals(scenario, config, domain, schema_module, rule_config) do
+    case DecisionEngine.ReqLLMMigrationCoordinator.extract_signals(scenario, config, domain, schema_module, rule_config) do
       {:ok, signals} ->
         Logger.debug("Successfully extracted signals for domain #{domain}: #{inspect(Map.keys(signals))}")
         {:ok, signals}
@@ -220,7 +220,7 @@ defmodule DecisionEngine do
   end
 
   defp generate_domain_justification(signals, decision_result, config, domain) do
-    case DecisionEngine.LLMClient.generate_justification(signals, decision_result, config, domain) do
+    case DecisionEngine.ReqLLMMigrationCoordinator.generate_justification(signals, decision_result, config, domain) do
       {:ok, justification} ->
         Logger.debug("Successfully generated justification for domain #{domain}")
         {:ok, justification}

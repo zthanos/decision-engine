@@ -510,7 +510,7 @@ defmodule DecisionEngine.PDFProcessor do
   defp generate_domain_from_text(text_content, domain_name, config) do
     prompt = build_domain_generation_prompt(text_content, domain_name)
 
-    case DecisionEngine.LLMClient.generate_text(prompt, config) do
+    case DecisionEngine.ReqLLMMigrationCoordinator.generate_text(prompt, config) do
       {:ok, response} ->
         parse_domain_config_response(response, domain_name)
       {:error, reason} ->
@@ -572,7 +572,7 @@ defmodule DecisionEngine.PDFProcessor do
         Logger.warning("Streaming failed, falling back to non-streaming: #{inspect(reason)}")
         send(stream_pid, {:processing_step, "Switching to standard processing", 65, "Streaming unavailable, using standard AI processing..."})
 
-        case DecisionEngine.LLMClient.generate_text(prompt, config) do
+        case DecisionEngine.ReqLLMMigrationCoordinator.generate_text(prompt, config) do
           {:ok, response} ->
             send(stream_pid, {:processing_step, "AI analysis complete", 80, "Successfully generated domain configuration"})
             {:ok, response}

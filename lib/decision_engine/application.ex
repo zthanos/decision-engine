@@ -60,6 +60,10 @@ defmodule DecisionEngine.Application do
       DecisionEngine.ReqLLMPerformanceMonitor,
       # Start the ReqLLMContextPersistence for conversation context persistence
       DecisionEngine.ReqLLMContextPersistence,
+      # Start the ReqLLMMigrationManager for phased migration management
+      DecisionEngine.ReqLLMMigrationManager,
+      # Start the ReqLLMMigrationMonitor for automated monitoring and rollback
+      DecisionEngine.ReqLLMMigrationMonitor,
       # Start the endpoint so the web interface is available
       DecisionEngineWeb.Endpoint
     ]
