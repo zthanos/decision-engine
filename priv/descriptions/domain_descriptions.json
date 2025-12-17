@@ -1,11 +1,12 @@
 {
   "version": "1.0",
+  "updated_at": "2025-12-17T03:42:42.011000Z",
   "descriptions": {
     "data_platform": "The Data Platform domain defines how an organization ingests, stores, processes, and analyzes its data assets at scale. It addresses scenarios ranging from batch ETL pipelines and real‑time streaming analytics to globally distributed NoSQL storage for high‑velocity workloads. Key decision factors include volume, velocity, variety, latency, consistency, analytical needs, retention requirements, compliance obligations, and budget constraints.",
     "domain1": "Description 1",
     "domain2": "Description 2",
     "integration_platform": "The Integration Platform domain defines how diverse applications, services, and data sources communicate within an organization. It handles scenarios ranging from enterprise messaging and high‑throughput event streaming to API gateway management, workflow orchestration, and lightweight event‑driven connectors. Key decision factors include integration patterns, message volume, protocol and security requirements, transformation complexity, endpoint count, reliability needs, monitoring expectations, deployment model, and legacy system support.",
-    "power_platform": "The Power Platform domain focuses on enabling rapid digital transformation through low‑code tools that streamline business processes and enhance user productivity. It handles scenarios such as automating routine tasks, building custom front‑end applications for internal or customer use, and integrating disparate data sources into cohesive workflows. Key decision factors include the type of workload, primary users, trigger nature, integration complexity, compliance requirements, and expected data volume."
-  },
-  "updated_at": "2025-12-14T21:44:26.080658Z"
+    "power_platform": "The Power Platform domain focuses on enabling rapid digital transformation through low‑code tools that streamline business processes and enhance user productivity. It handles scenarios such as automating routine tasks, building custom front‑end applications for internal or customer use, and integrating disparate data sources into cohesive workflows. Key decision factors include the type of workload, primary users, trigger nature, integration complexity, compliance requirements, and expected data volume.",
+    "test_domain": "Test description"
+  }
 }

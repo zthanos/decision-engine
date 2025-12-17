@@ -45,6 +45,7 @@ defmodule DecisionEngine.MixProject do
       {:dns_cluster, "~> 0.1.1"},
       {:bandit, "~> 1.2"},
       {:req, "~> 0.4"},
+      {:req_llm, "~> 1.0.0"},
       {:finch, "~> 0.18"},
       {:gettext, "~> 0.24"},
       {:ex_json_schema, "~> 0.10"},
