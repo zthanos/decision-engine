@@ -11,6 +11,9 @@ defmodule DecisionEngine.Application do
     # Initialize ReqLLM configuration
     DecisionEngine.ReqLLMConfig.init_config()
 
+    # Initialize ReqLLM monitoring systems
+    DecisionEngine.ReqLLMMonitoring.init()
+
     children = [
       # Start Finch for HTTP client streaming support
       {Finch, name: DecisionEngine.Finch},
@@ -64,6 +67,8 @@ defmodule DecisionEngine.Application do
       DecisionEngine.ReqLLMMigrationManager,
       # Start the ReqLLMMigrationMonitor for automated monitoring and rollback
       DecisionEngine.ReqLLMMigrationMonitor,
+      # Start the ReqLLMProductionMonitor for production monitoring and alerting
+      DecisionEngine.ReqLLMProductionMonitor,
       # Start the endpoint so the web interface is available
       DecisionEngineWeb.Endpoint
     ]

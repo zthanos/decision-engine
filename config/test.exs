@@ -9,3 +9,14 @@ config :decision_engine, DecisionEngineWeb.Endpoint,
 config :logger, level: :warning
 
 config :phoenix, :plug_init_mode, :runtime
+
+# Ensure the application starts for tests
+config :decision_engine, :start_application, true
+
+# Configure LM Studio for testing
+config :decision_engine, :llm_config,
+  provider: :openai,
+  api_key: "test-key",
+  base_url: "http://localhost:1234/v1",
+  model: "local-model",
+  timeout: 30000

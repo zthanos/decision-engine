@@ -1398,7 +1398,7 @@ defmodule DecisionEngine.PDFProcessor do
       # Network/API related errors - retry with exponential backoff
       match?({:llm_call_failed, _}, reason) -> {:retry, 2000}
       reason == :no_llm_config_available -> :no_retry
-      reason == :no_api_key_configured -> {:error, "No API key configured - using fallback generation"}
+      reason == :no_api_key_configured -> :no_retry
 
       # File system errors - single retry
       is_binary(reason) and String.contains?(reason, "Cannot read PDF file") -> {:retry, 1000}
